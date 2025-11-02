@@ -1,0 +1,137 @@
+Hello, I would like you to help me plan and then later create a business application.
+This is a program which helps with "scheduling" of resources, shifts, for a professional kitchen.
+
+In this first phase, I would like you to help me to structure the requirement first.
+In a second phase, I will ask you to help me formulate prompts for Codex.
+I am working in VS code, with the Codex Assistant.
+
+Later on, the application should be available in French and English.
+But for formulating the requirements, I want to interact with you in English.
+
+In the following, I will start to put together the requirements, and I would like you to help me to sort it, group it, 
+And crosscheck it for consistency, so in order to prepare a consistent skeleton of requirements.
+
+Please see the details here below.
+
+Technial requirements
+I would like to link this to Git Hub
+At the end I would like this to be hosted on a server (for example fly.io)
+It should be like a web site
+With authorisation
+I would like to potentially create an app later on
+There should be the possibility to have the site / app in multiple languages.
+At least English and French
+All elements, variables, rules, should be visible, and it should be possible to maintain the rules / master data
+
+Business Requirements
+I would like to create a program which helps with "scheduling" of resources, shifts, for a professional kitchen.
+
+For referene, I will provide here a screenshot of how such a planning looks like today.
+The future planning can be different, but just so that you can have a reference of what is there today.
+
+The objective of this exercise is to find the best possible combination of resources,
+Which makes the planning as linear as possible.
+
+It should make sure at the same time
+- that the resources do not work more as they can
+- and also that they do not work less compared to what they can
+
+
+There should be the possibility to create a suggestion for a monthly plan.
+This plan needs to take into consideration a number of restrictions, which I will describe further down.
+The planning should be by resource and day.
+The plan by resource and day should be indicated with a certain "Shift Code".
+I will describe the Shift Codes further down.
+The planning needs to take into consideration the vacation planning by resource.
+There should be the possibility to import or copy/paste the vacation plan of a resource.
+Resources and their type needs to be maintained, I will provide details on this further down.
+Based on the inputs of the schedule, the summarised hours per resource and month should be calculated.
+
+In the following, I will describe the details:
+
+Resources.
+I will provide the descriptions of the resources in French and English
+The application should have a menue / a place, where the details per resource can be maintained.
+Type of Resource: 
+cuisinier → cook / chef
+aide cuisinier → kitchen assistant / assistant cook
+casserolier → dishwasher / pot washer (literally “person who washes pots and pans”)
+apprenti → apprentice / trainee
+
+Each resource can have a % of availability/deployment.
+For example
+100%
+80%
+
+There should be the possibility to maintain how many of each resource are part of the overall resource pool
+For example
+7 cooks
+3 kitchen assistants
+2 pot washers
+2 apprentice / trainee
+1 joker/jumper-cook (his roll is to jump in, when there are not enough cooks, in particular on week ends)
+
+
+Restrictions / Rules for planning
+Number of hours of work per month 174:18
+In this case, this means 174 hours and 18 minutes.
+This is a value which the user can maintain for every month / year.
+So there needs to be a list of month / year, where this information can be maintained.
+It can be different every month.
+
+Shift Types:
+Shift 1: From 7:00 - 16:15
+Shift 4: from 7:15 - 19:15
+Shift 10: from 10:15 - 19:30
+Shift 8: from 8:00 - 17:15
+
+For 1 resource / employee, there is the limit of 50 hours by week, which cannot be exceeded
+1 resource can work on up to 6 calendar days per week
+1 resource should not work on 6 subsequent days per week
+Therefore, also the planning of a previous week needs to be taken into consideration
+
+Each resource should have 2 subsequent days "off" per month.
+Those subsequent days should be 
+- either a Saturday and Sunday
+- or a Sunday and Monday
+
+If a resource does work on 6 days by week, the resource can do a so called "prime" shift.
+A "prime" shift is one of the above shift types, where the resource starts 1 h later.
+Example: shift type 1 is from 7:00 - 16:15.
+A "prime" of shift 1 is 08:00 - 16:15.
+As an exception, it is not possible to perform a "prime" for shift type 4 (7:15 - 19:15).
+
+Minimum requirements for 1 day of work:
+There need to be at least 7 resources.
+Composed of at least
+1 pot washer
+1 -2 kitchen assistants
+1 apprentice / trainee
+The rest should be cooks
+
+For the cooks, at least 1 of them need to do a shift type 4
+The other profiles should do a shift type 1
+If there is only 1 pot washers, he should do a shift type 10
+If there are 2 pot washers, they should be doing 1 shift type 10 and the other a shift type 8
+
+Here some more requirements with reference to the vacations:
+Not more than 4 resources should be on vacation at the same time
+The public holidays should be visible as well
+Each resource should have the possibility to indicate days, where they prefer to have a free time, which means, a day or half day when they are absent.
+This does not mean that they are on vacation, but it means they are not planned for work at this point in time.
+In French the term for this is "desir de repos".
+Each resource can indicate 3 of those "desire de repos" per month.
+In the plan, this can be considerate, if possible, but if there is no other way, this might be overruled.
+
+From a timing perspective, the plan for the following month should be ready on the 15th day of the month before.
+So example, on October 15th, I want to have the plan for November ready.
+
+
+
+
+
+
+
+
+
+

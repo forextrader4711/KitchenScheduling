@@ -1,0 +1,89 @@
+{
+  "metadata": {
+    "title": "Kitchen Scheduling System – Functional and Technical Requirements",
+    "version": "1.0",
+    "author": "Helmut Koehler",
+    "created": "2025-10-28",
+    "language": "English",
+    "description": "Detailed functional and technical requirements for a web-based professional kitchen scheduling system."
+  },
+  "project": {
+    "goal": "Develop a web-based application to generate, manage, and visualize monthly work schedules for staff in a professional kitchen.",
+    "objectives": [
+      "Generate optimized monthly shift plans automatically.",
+      "Ensure balanced workload across all resources.",
+      "Respect availability, contractual limits, and operational constraints.",
+      "Keep all configuration and master data editable via an admin interface.",
+      "Support English and French interfaces."
+    ],
+    "scope": {
+      "time_horizon": "Monthly scheduling",
+      "target_users": ["Kitchen managers", "Staff planners", "Supervisors"],
+      "key_outputs": [
+        "Shift schedule grid (Resources × Days)",
+        "Summary of hours per employee",
+        "Violation reports for constraints"
+      ]
+    }
+  },
+  "technical": {
+    "architecture": {
+      "type": "Web-based modular architecture",
+      "frontend": {
+        "framework": "React or Vue.js",
+        "features": [
+          "Responsive design for desktop/tablet",
+          "Grid-based planning view",
+          "Language toggle (English/French)"
+        ]
+      },
+      "backend": {
+        "framework": "FastAPI (Python)",
+        "api_type": "REST or GraphQL",
+        "features": [
+          "CRUD operations for resources, shifts, planning",
+          "Authentication & authorization",
+          "Constraint validation logic"
+        ]
+      },
+      "database": {
+        "type": "Relational (PostgreSQL or SQLite)",
+        "notes": "Stores master data, schedules, and rules. Supports versioning of monthly plans."
+      },
+      "hosting": {
+        "platform": "Fly.io",
+        "alternatives": ["Render", "Railway", "AWS"],
+        "deployment": "Docker container"
+      },
+      "version_control": {
+        "system": "GitHub",
+        "usage": [
+          "Repository management",
+          "Continuous Integration",
+          "Documentation (Markdown format)"
+        ]
+      },
+      "authentication": {
+        "login": "Email/password or SSO",
+        "roles": ["Admin", "Planner", "Read-only user"],
+        "security": "JWT-based session management"
+      },
+      "internationalization": {
+        "supported_languages": ["English", "French"],
+        "implementation": "JSON-based translation dictionaries"
+      },
+      "configuration_management": {
+        "editable_elements": [
+          "Shift definitions",
+          "Role names",
+          "Monthly parameters (contractual hours, limits)",
+          "Holiday calendar"
+        ]
+      },
+      "future_extensions": [
+        "Mobile app (iOS/Android)",
+        "Integration with HR/time tracking systems"
+      ]
+    }
+  }
+}

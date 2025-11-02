@@ -1,0 +1,20 @@
+{
+  "app": {
+    "title": "Kitchen Scheduling"
+  },
+  "actions": {
+    "toggleLanguage": "FR / EN"
+  },
+  "planning": {
+    "gridTitle": "Monthly plan for {{month}}",
+    "resource": "Resource"
+  },
+  "summary": {
+    "title": "Hours Summary",
+    "hours": "{{worked}} h worked / {{contract}} h contract"
+  },
+  "violations": {
+    "title": "Constraint Violations",
+    "none": "All constraints satisfied for this scenario."
+  }
+}

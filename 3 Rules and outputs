@@ -1,0 +1,72 @@
+{
+  "rules": {
+    "working_time": {
+      "max_hours_per_week": 50,
+      "max_working_days_per_week": 6,
+      "max_consecutive_working_days": 6,
+      "required_consecutive_days_off_per_month": 2,
+      "days_off_patterns": ["Saturday + Sunday", "Sunday + Monday"]
+    },
+    "shift_rules": {
+      "description": "Rules defining how shifts are assigned across resources each day.",
+      "minimum_daily_staff": 7,
+      "composition": {
+        "pot_washers": { "min": 1 },
+        "kitchen_assistants": { "min": 1, "max": 2 },
+        "apprentices": { "min": 1 },
+        "cooks": { "remaining_positions": true }
+      },
+      "specific_allocations": [
+        "At least one cook must be assigned to shift 4.",
+        "All other cooks normally assigned to shift 1.",
+        "If one pot washer: assign shift 10.",
+        "If two pot washers: one shift 10, one shift 8."
+      ],
+      "prime_shifts": {
+        "definition": "A shift starting one hour later than the standard time.",
+        "allowed_for": [1, 8, 10],
+        "excluded_for": [4]
+      }
+    },
+    "vacations_and_absences": {
+      "max_concurrent_vacations": 4,
+      "public_holidays": {
+        "visibility": true,
+        "description": "Displayed as non-working days in the schedule."
+      },
+      "desired_rest_days": {
+        "max_per_month_per_resource": 3,
+        "priority": "Soft constraint; applied when possible."
+      }
+    }
+  },
+  "outputs": {
+    "planning_table": {
+      "description": "Monthly grid displaying resources versus days, with shift codes and absence symbols."
+    },
+    "summary_view": {
+      "description": "Displays worked hours, contractual hours, and balance for each resource."
+    },
+    "constraint_report": {
+      "description": "Lists any rule violations such as overtime, missing roles, or excessive absences."
+    },
+    "exports": {
+      "formats": ["PDF", "Excel"],
+      "notes": "Used for printing and sharing finalized schedules."
+    },
+    "version_tracking": {
+      "description": "Retains previous versions of validated monthly plans."
+    }
+  },
+  "localization": {
+    "languages_supported": ["English", "French"],
+    "implementation": "Translation dictionaries (JSON/YAML files).",
+    "user_toggle": true
+  },
+  "future_enhancements": [
+    "Mobile app for planners and staff.",
+    "Integration with HR and time-tracking systems.",
+    "AI-based schedule optimization (e.g., Google OR-Tools).",
+    "Notification and approval workflows for vacation or shift changes."
+  ]
+}

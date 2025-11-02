@@ -1,0 +1,95 @@
+{
+  "functional": {
+    "core_features": [
+      "Automatic schedule generation for all kitchen resources.",
+      "Manual adjustment interface for planners.",
+      "Monthly summary calculation of worked and contractual hours.",
+      "Vacation import or copy-paste support per resource.",
+      "Constraint validation for compliance with work rules.",
+      "Scenario generation and comparison before validation.",
+      "Enforced publication deadline (plan ready by 15th of previous month).",
+      "Reporting and export to PDF or Excel."
+    ],
+    "user_roles": [
+      {
+        "role": "Admin",
+        "permissions": ["Full access to configuration and data", "User management", "System parameters"]
+      },
+      {
+        "role": "Planner",
+        "permissions": ["Generate and adjust schedules", "Import vacations", "Validate plans"]
+      },
+      {
+        "role": "Viewer",
+        "permissions": ["Read-only access to published plans"]
+      }
+    ]
+  },
+  "data_model": {
+    "entities": {
+      "resources": {
+        "description": "Represents employees or staff members working in the kitchen.",
+        "fields": [
+          "id",
+          "name",
+          "role",
+          "availability_percent",
+          "contract_hours_per_month",
+          "preferred_days_off",
+          "vacation_days",
+          "language",
+          "notes"
+        ]
+      },
+      "resource_types": [
+        { "french": "cuisinier", "english": "cook / chef" },
+        { "french": "aide cuisinier", "english": "kitchen assistant" },
+        { "french": "casserolier", "english": "pot washer" },
+        { "french": "apprenti", "english": "apprentice / trainee" },
+        { "french": "joker", "english": "relief cook" }
+      ],
+      "resource_pool_example": [
+        { "role": "cook", "count": 7 },
+        { "role": "kitchen_assistant", "count": 3 },
+        { "role": "pot_washer", "count": 2 },
+        { "role": "apprentice", "count": 2 },
+        { "role": "relief_cook", "count": 1 }
+      ],
+      "shifts": [
+        { "code": 1, "start": "07:00", "end": "16:15", "hours": 9.25, "description": "Standard morning shift" },
+        { "code": 4, "start": "07:15", "end": "19:15", "hours": 12.0, "description": "Long shift" },
+        { "code": 8, "start": "08:00", "end": "17:15", "hours": 9.25, "description": "Medium shift" },
+        { "code": 10, "start": "10:15", "end": "19:30", "hours": 9.25, "description": "Late shift" }
+      ],
+      "prime_shifts": {
+        "description": "Prime shifts start one hour later than the normal shift.",
+        "allowed_for": [1, 8, 10],
+        "not_allowed_for": [4]
+      },
+      "planning": {
+        "description": "Stores daily assignment of resources to shifts.",
+        "fields": [
+          "resource_id",
+          "date",
+          "shift_code",
+          "absence_type",
+          "comment"
+        ]
+      },
+      "parameters": {
+        "description": "Global planning configuration.",
+        "fields": [
+          "month",
+          "contractual_hours",
+          "max_vacation_overlap",
+          "publication_deadline"
+        ]
+      }
+    },
+    "relationships": [
+      "Each resource has many planning entries.",
+      "Each planning entry references one shift code.",
+      "Parameters apply globally per month."
+    ]
+  }
+}

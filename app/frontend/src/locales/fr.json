@@ -1,0 +1,20 @@
+{
+  "app": {
+    "title": "Planification de Cuisine"
+  },
+  "actions": {
+    "toggleLanguage": "FR / EN"
+  },
+  "planning": {
+    "gridTitle": "Planning mensuel pour {{month}}",
+    "resource": "Ressource"
+  },
+  "summary": {
+    "title": "Synthèse des heures",
+    "hours": "{{worked}} h effectuées / {{contract}} h contrat"
+  },
+  "violations": {
+    "title": "Contraintes non respectées",
+    "none": "Toutes les contraintes sont respectées pour ce scénario."
+  }
+}
