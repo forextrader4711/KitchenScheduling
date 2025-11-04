@@ -32,3 +32,11 @@ export interface ViolationItem {
   category: string;
   severity: "info" | "warning" | "critical";
 }
+
+export interface Shift {
+  code: number;
+  description: string;
+  start: string;
+  end: string;
+  hours: number;
+}
