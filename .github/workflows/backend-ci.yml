@@ -1,0 +1,64 @@
+name: Backend CI
+
+on:
+  push:
+    paths:
+      - 'app/backend/**'
+      - '.github/workflows/backend-ci.yml'
+  pull_request:
+    paths:
+      - 'app/backend/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: kitchen_scheduler
+          POSTGRES_USER: scheduler
+          POSTGRES_PASSWORD: scheduler
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U scheduler -d kitchen_scheduler"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        working-directory: app/backend
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install -e '.[dev]'
+
+      - name: Run lint (ruff)
+        working-directory: app/backend
+        run: |
+          . .venv/bin/activate
+          scripts/lint.sh
+
+      - name: Run pytest (SQLite)
+        working-directory: app/backend
+        run: |
+          . .venv/bin/activate
+          scripts/run_tests.sh
+
+      - name: Run pytest (Postgres)
+        working-directory: app/backend
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://scheduler:scheduler@localhost:5432/kitchen_scheduler
+        run: |
+          . .venv/bin/activate
+          scripts/run_tests.sh

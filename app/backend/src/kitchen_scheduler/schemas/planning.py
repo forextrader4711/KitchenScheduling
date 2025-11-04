@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import List
+from typing import Any, List, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from kitchen_scheduler.schemas.resource import PlanningEntryRead
 
@@ -20,10 +20,39 @@ class PlanScenarioRead(PlanScenarioBase):
     id: int
     created_at: datetime
     updated_at: datetime
+    violations: list[dict] = Field(default_factory=list)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlanScenarioUpdate(BaseModel):
+    name: str | None = None
+    status: str | None = None
 
 
 class PlanGenerationRequest(BaseModel):
     month: str
+
+
+class PlanViolation(BaseModel):
+    code: str
+    message: str
+    severity: Literal["info", "warning", "critical"] = "warning"
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class PlanGenerationResponse(BaseModel):
+    entries: List[PlanningEntryRead]
+    violations: List[PlanViolation] = Field(default_factory=list)
+
+
+class PlanVersionRead(BaseModel):
+    id: int
+    scenario_id: int
+    version_label: str
+    published_at: datetime | None
+    published_by: str | None
+    summary_hours: str | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

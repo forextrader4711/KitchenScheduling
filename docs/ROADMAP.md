@@ -11,12 +11,13 @@ This roadmap breaks the stakeholder requirements into executable milestones and 
 ## Milestone 1 – Persistence Foundation
 - Introduce Alembic migrations to create tables for resources, shifts, planning entries, monthly parameters, and scenarios.
 - Seed baseline master data (default shifts, roles, demo users) via migrations or fixtures.
-- Flesh out repository methods (`list/create/update/delete`) for resources, shifts, scenarios; ensure all endpoints return Pydantic models.
-- Add async integration tests that spin up a transient Postgres (Docker) and exercise the repositories + API routes.
+- Flesh out repository methods (`list/create/update/delete`) for resources, shifts, scenarios; ensure all endpoints return Pydantic models. — **In progress:** CRUD endpoints now cover resources, shifts, plan scenarios, and monthly parameters with unit tests and HTTP API tests against SQLite; expand coverage to Postgres-backed integration tests.
+- Add async integration tests that spin up a transient Postgres (Docker) and exercise the repositories + API routes. — **Ready:** Docker compose (`app/backend/tests/docker-compose.yml`) and fixtures honor `TEST_DATABASE_URL`; run Postgres-backed pytest after bringing the database up.
 
 ## Milestone 2 – Rule-Aware Scheduling Engine
 - Translate rule JSON into structured models/services (work-time limits, composition requirements, vacation caps).
 - Replace the stub `generate_stub_schedule` with an algorithm that enforces hard constraints and reports soft violations.
+- See `docs/SCHEDULER_PLAN.md` for the staged rollout of the optimisation engine.
 - Expose planning endpoints to trigger schedule generation, return violation reports, and version schedules.
 - Cover the scheduling logic with unit tests (rule satisfaction, violation reporting) plus end-to-end API tests on representative datasets.
 

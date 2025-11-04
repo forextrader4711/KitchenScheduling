@@ -10,11 +10,11 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from kitchen_scheduler.core.config import get_settings
-from kitchen_scheduler.db.base import Base
 from kitchen_scheduler.db import models  # noqa: F401  # ensure model metadata is loaded
+from kitchen_scheduler.db.base import Base
 
 if TYPE_CHECKING:
-    from alembic.runtime.environment import EnvironmentContext
+    pass
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from kitchen_scheduler.db.base import Base
@@ -31,8 +31,9 @@ class PlanScenario(Base):
     month: Mapped[str] = mapped_column(String(7), index=True)  # Format YYYY-MM
     name: Mapped[str] = mapped_column(String(120), nullable=False, default="Draft")
     status: Mapped[str] = mapped_column(String(32), default="draft")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+    violations: Mapped[list[dict]] = mapped_column(JSON, default=list)
 
     entries: Mapped[list["PlanningEntry"]] = relationship(
         back_populates="scenario", cascade="all, delete-orphan"
@@ -49,5 +50,6 @@ class PlanVersion(Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime)
     published_by: Mapped[str | None] = mapped_column(String(120))
     summary_hours: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     scenario: Mapped["PlanScenario"] = relationship(back_populates="versions")

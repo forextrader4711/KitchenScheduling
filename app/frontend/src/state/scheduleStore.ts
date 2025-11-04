@@ -24,6 +24,21 @@ type PlanningEntryDto = {
   comment?: string | null;
 };
 
+type PlanViolationDto = {
+  code: string;
+  message: string;
+  severity: "info" | "warning" | "critical";
+  meta?: Record<string, unknown>;
+};
+
+type PlanScenarioDto = {
+  id: number;
+  month: string;
+  name: string;
+  status: string;
+  violations?: PlanViolationDto[];
+};
+
 interface ScheduleState {
   month: string | null;
   isLoading: boolean;
@@ -93,9 +108,13 @@ const useScheduleStore = create<ScheduleState>((set) => ({
     const fallbackMonth = new Date().toISOString().slice(0, 7);
 
     try {
-      const [resourcesResponse, planResponse] = await Promise.all([
+      const [resourcesResponse, planResponse, scenariosResponse] = await Promise.all([
         api.get<ResourceDto[]>("/resources"),
-        api.post<PlanningEntryDto[]>("/planning/generate", { month: fallbackMonth })
+        api.post<{ entries: PlanningEntryDto[]; violations: PlanViolationDto[] }>(
+          "/planning/generate",
+          { month: fallbackMonth }
+        ),
+        api.get<PlanScenarioDto[]>("/planning/scenarios")
       ]);
 
       const resources: Resource[] = resourcesResponse.data.map((item) => ({
@@ -110,7 +129,7 @@ const useScheduleStore = create<ScheduleState>((set) => ({
         notes: item.notes
       }));
 
-      const entries: PlanningEntry[] = planResponse.data.map((entry) => ({
+      const entries: PlanningEntry[] = planResponse.data.entries.map((entry) => ({
         id: entry.id,
         resourceId: entry.resource_id,
         date: entry.date,
@@ -119,12 +138,24 @@ const useScheduleStore = create<ScheduleState>((set) => ({
         comment: entry.comment
       }));
 
+      const scenarioViolations =
+        scenariosResponse.data.find((scenario) => scenario.month === fallbackMonth)?.violations ??
+        planResponse.data.violations ??
+        [];
+
+      const violations: ViolationItem[] = scenarioViolations.map((violation, index) => ({
+        id: `${violation.code}-${index}`,
+        message: violation.message,
+        category: violation.code,
+        severity: violation.severity
+      }));
+
       set({
         month: fallbackMonth,
         resources,
         planningEntries: entries,
         summaries: computeSummaries(entries, resources),
-        violations: [],
+        violations,
         isLoading: false
       });
     } catch (error) {

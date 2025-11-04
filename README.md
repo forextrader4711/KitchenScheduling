@@ -14,12 +14,14 @@ Web-based platform that generates, manages, and visualizes monthly work schedule
 
 ```bash
 cd app/backend
-python3 -m venv venv
-. venv/bin/activate
+python3 -m venv .venv
+. .venv/bin/activate
 pip install -e .[dev]
 alembic -c alembic.ini upgrade head
 uvicorn kitchen_scheduler.main:app --reload
 ```
+
+Run tests with `python -m pytest`. To exercise the API against Postgres locally, bring up the container at `app/backend/tests/docker-compose.yml` and set `TEST_DATABASE_URL` before running the suite.
 
 ### Frontend
 

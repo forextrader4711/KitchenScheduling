@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ShiftBase(BaseModel):
@@ -17,8 +17,14 @@ class ShiftCreate(ShiftBase):
 
 
 class ShiftRead(ShiftBase):
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ShiftUpdate(BaseModel):
+    description: str | None = None
+    start: str | None = None
+    end: str | None = None
+    hours: float | None = None
 
 
 class ResourceBase(BaseModel):
@@ -39,8 +45,18 @@ class ResourceCreate(ResourceBase):
 class ResourceRead(ResourceBase):
     id: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ResourceUpdate(BaseModel):
+    name: str | None = None
+    role: Literal["cook", "kitchen_assistant", "pot_washer", "apprentice", "relief_cook"] | None = None
+    availability_percent: int | None = None
+    contract_hours_per_month: float | None = Field(default=None, gt=0)
+    preferred_days_off: str | None = None
+    vacation_days: str | None = None
+    language: str | None = None
+    notes: str | None = None
 
 
 class PlanningEntryBase(BaseModel):
@@ -54,5 +70,4 @@ class PlanningEntryBase(BaseModel):
 class PlanningEntryRead(PlanningEntryBase):
     id: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
