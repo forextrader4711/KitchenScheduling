@@ -7,14 +7,92 @@
   },
   "planning": {
     "gridTitle": "Planning mensuel pour {{month}}",
-    "resource": "Ressource"
+    "resource": "Ressource",
+    "resourcePlural": "Ressources",
+    "tabLabel": "Planning",
+    "heroSubtitle": "Analysez le planning généré, équilibrez les heures et gardez les données de référence à jour.",
+    "refreshButton": "Actualiser les données",
+    "gridHint": "Ajustez les ressources ou les shifts via les données de référence puis rafraîchissez le planning."
+  },
+  "masterData": {
+    "tabLabel": "Données de référence",
+    "title": "Données de référence",
+    "subtitle": "Gérez les ressources et les shifts utilisés pour la planification.",
+    "resourcesTab": "Ressources",
+    "shiftsTab": "Shifts",
+    "resourcesHeading": "Liste des ressources",
+    "shiftsHeading": "Définition des shifts",
+    "addResource": "Ajouter une ressource",
+    "addShift": "Ajouter un shift",
+    "editResource": "Modifier la ressource",
+    "editShift": "Modifier le shift",
+    "noResources": "Aucune ressource enregistrée pour le moment.",
+    "noShifts": "Aucun shift défini pour le moment.",
+    "columns": {
+      "name": "Nom",
+      "role": "Rôle",
+      "availability": "Disponibilité %",
+      "contractHours": "Heures contractuelles",
+      "language": "Langue",
+      "actions": "Actions",
+      "code": "Code",
+      "description": "Description",
+      "start": "Début",
+      "end": "Fin",
+      "hours": "Heures"
+    },
+    "form": {
+      "name": "Nom",
+      "role": "Rôle",
+      "availability": "Disponibilité %",
+      "contractHours": "Heures contractuelles par mois",
+      "preferredDaysOff": "Jours de repos préférés",
+      "vacationDays": "Jours de congé",
+      "language": "Langue",
+      "notes": "Notes",
+      "code": "Code",
+      "description": "Description",
+      "start": "Début",
+      "end": "Fin",
+      "hours": "Heures"
+    },
+    "roles": {
+      "cook": "Chef de partie",
+      "kitchen_assistant": "Assistant cuisine",
+      "pot_washer": "Plongeur",
+      "apprentice": "Apprenti",
+      "relief_cook": "Cuisinier volant"
+    },
+    "shiftNames": {
+      "standard_morning_shift": "Service du matin standard",
+      "long_shift": "Shift longue journée",
+      "medium_shift": "Shift journée",
+      "late_shift": "Shift du soir"
+    },
+    "notifications": {
+      "resourceCreated": "Ressource créée.",
+      "resourceUpdated": "Ressource mise à jour.",
+      "resourceDeleted": "Ressource supprimée.",
+      "shiftCreated": "Shift créé.",
+      "shiftUpdated": "Shift mis à jour.",
+      "shiftDeleted": "Shift supprimé."
+    }
   },
   "summary": {
     "title": "Synthèse des heures",
-    "hours": "{{worked}} h effectuées / {{contract}} h contrat"
+    "hours": "{{worked}} h effectuées / {{contract}} h contrat",
+    "onTrack": "Objectif atteint",
+    "overTarget": "+{{hours}} h",
+    "underTarget": "{{hours}} h restantes"
   },
   "violations": {
     "title": "Contraintes non respectées",
     "none": "Toutes les contraintes sont respectées pour ce scénario."
+  },
+  "common": {
+    "cancel": "Annuler",
+    "save": "Enregistrer",
+    "create": "Créer",
+    "unexpectedError": "Une erreur inattendue est survenue."
   }
 }

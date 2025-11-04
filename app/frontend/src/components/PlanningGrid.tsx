@@ -3,8 +3,9 @@ import {
   Box,
   Card,
   CardContent,
-  CircularProgress,
-  Divider,
+  CardHeader,
+  Chip,
+  Skeleton,
   Table,
   TableBody,
   TableCell,
@@ -51,43 +52,81 @@ const PlanningGrid = () => {
 
   if (isLoading) {
     return (
-      <Card sx={{ minHeight: 400, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <CircularProgress />
+      <Card sx={{ minHeight: 420 }}>
+        <CardContent>
+          <Skeleton variant="text" width="45%" sx={{ mb: 2 }} />
+          <Skeleton variant="rounded" height={280} />
+        </CardContent>
       </Card>
     );
   }
 
   return (
-    <Card sx={{ minHeight: 400 }}>
-      <CardContent>
-        <Typography variant="h6" gutterBottom>
-          {t("planning.gridTitle", { month })}
-        </Typography>
-        <Divider sx={{ mb: 2 }} />
+    <Card sx={{ minHeight: 420 }}>
+      <CardHeader
+        title={
+          <Typography variant="h6" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            {t("planning.gridTitle", { month })}
+            <Chip
+              label={`${resources.length} ${
+                resources.length === 1
+                  ? t("planning.resource")
+                  : t("planning.resourcePlural", { defaultValue: `${t("planning.resource")}s` })
+              }`}
+            />
+          </Typography>
+        }
+        subheader={t("planning.gridHint", {
+          defaultValue: "Use master data to adjust resources or shifts, then refresh the plan."
+        })}
+      />
+      <CardContent sx={{ pt: 0 }}>
         <Box sx={{ overflowX: "auto" }}>
-          <Table size="small">
+          <Table size="small" stickyHeader>
             <TableHead>
               <TableRow>
-                <TableCell>{t("planning.resource")}</TableCell>
+                <TableCell sx={{ fontWeight: 600 }}>{t("planning.resource")}</TableCell>
                 {daysInMonth.map((day) => (
-                  <TableCell key={day} align="center">
+                  <TableCell
+                    key={day}
+                    align="center"
+                    sx={{
+                      fontWeight: 600,
+                      borderLeft: day === daysInMonth[0] ? undefined : "1px solid rgba(51, 88, 255, 0.08)"
+                    }}
+                  >
                     {day}
                   </TableCell>
                 ))}
               </TableRow>
             </TableHead>
             <TableBody>
-              {Object.entries(resourceMap).map(([resourceId, name]) => (
-                <TableRow key={resourceId}>
-                  <TableCell component="th" scope="row">
+              {Object.entries(resourceMap).map(([resourceId, name], rowIndex) => (
+                <TableRow
+                  key={resourceId}
+                  sx={{
+                    bgcolor: rowIndex % 2 === 0 ? "rgba(51, 88, 255, 0.02)" : "transparent",
+                    "&:hover": { bgcolor: "rgba(51, 88, 255, 0.06)" }
+                  }}
+                >
+                  <TableCell component="th" scope="row" sx={{ fontWeight: 600 }}>
                     {name}
                   </TableCell>
-                  {daysInMonth.map((day) => {
+                  {daysInMonth.map((day, index) => {
                     const key = `${resourceId}-${day}`;
                     const value = cellLookup[key] ?? "";
                     return (
-                      <TableCell key={key} align="center">
-                        <Typography variant="body2">{value}</Typography>
+                      <TableCell
+                        key={key}
+                        align="center"
+                        sx={{
+                          p: 1,
+                          borderLeft: index === 0 ? undefined : "1px solid rgba(51, 88, 255, 0.08)"
+                        }}
+                      >
+                        <Typography variant="body2" sx={{ fontWeight: value ? 600 : 400 }}>
+                          {value}
+                        </Typography>
                       </TableCell>
                     );
                   })}

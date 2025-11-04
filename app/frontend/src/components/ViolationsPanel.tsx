@@ -1,4 +1,4 @@
-import { Card, CardContent, List, ListItem, ListItemText, Typography } from "@mui/material";
+import { Card, CardContent, Chip, List, ListItem, Stack, Typography } from "@mui/material";
 import ReportProblemIcon from "@mui/icons-material/ReportProblem";
 import { useTranslation } from "react-i18next";
 
@@ -7,6 +7,13 @@ import useScheduleStore from "../state/scheduleStore";
 const ViolationsPanel = () => {
   const { t } = useTranslation();
   const { violations } = useScheduleStore();
+
+  const severityColor: Record<typeof violations[number]["severity"], "error" | "warning" | "info"> =
+    {
+      critical: "error",
+      warning: "warning",
+      info: "info"
+    };
 
   return (
     <Card>
@@ -22,8 +29,29 @@ const ViolationsPanel = () => {
         ) : (
           <List dense>
             {violations.map((violation) => (
-              <ListItem key={violation.id} disablePadding>
-                <ListItemText primary={violation.message} secondary={violation.category} />
+              <ListItem
+                key={violation.id}
+                disablePadding
+                sx={{
+                  mb: 1.5,
+                  "&:last-of-type": { mb: 0 }
+                }}
+              >
+                <Stack spacing={1.25} sx={{ width: "100%" }}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                      {violation.category}
+                    </Typography>
+                    <Chip
+                      size="small"
+                      color={severityColor[violation.severity]}
+                      label={violation.severity.toUpperCase()}
+                    />
+                  </Stack>
+                  <Typography variant="body2" color="text.secondary">
+                    {violation.message}
+                  </Typography>
+                </Stack>
               </ListItem>
             ))}
           </List>

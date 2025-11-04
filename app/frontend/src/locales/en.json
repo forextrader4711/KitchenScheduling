@@ -7,14 +7,92 @@
   },
   "planning": {
     "gridTitle": "Monthly plan for {{month}}",
-    "resource": "Resource"
+    "resource": "Resource",
+    "resourcePlural": "Resources",
+    "tabLabel": "Planning",
+    "heroSubtitle": "Review generated schedules, balance hours, and keep master data up to date.",
+    "refreshButton": "Refresh data",
+    "gridHint": "Use master data to adjust resources or shifts, then refresh the plan."
+  },
+  "masterData": {
+    "tabLabel": "Master Data",
+    "title": "Master Data",
+    "subtitle": "Manage resources and shifts used for planning.",
+    "resourcesTab": "Resources",
+    "shiftsTab": "Shifts",
+    "resourcesHeading": "Resource roster",
+    "shiftsHeading": "Shift definitions",
+    "addResource": "Add resource",
+    "addShift": "Add shift",
+    "editResource": "Edit resource",
+    "editShift": "Edit shift",
+    "noResources": "No resources recorded yet.",
+    "noShifts": "No shifts defined yet.",
+    "columns": {
+      "name": "Name",
+      "role": "Role",
+      "availability": "Availability %",
+      "contractHours": "Contract hours",
+      "language": "Language",
+      "actions": "Actions",
+      "code": "Code",
+      "description": "Description",
+      "start": "Start",
+      "end": "End",
+      "hours": "Hours"
+    },
+    "form": {
+      "name": "Name",
+      "role": "Role",
+      "availability": "Availability %",
+      "contractHours": "Contract hours per month",
+      "preferredDaysOff": "Preferred days off",
+      "vacationDays": "Vacation days",
+      "language": "Language",
+      "notes": "Notes",
+      "code": "Code",
+      "description": "Description",
+      "start": "Start",
+      "end": "End",
+      "hours": "Hours"
+    },
+    "roles": {
+      "cook": "Cook",
+      "kitchen_assistant": "Kitchen assistant",
+      "pot_washer": "Pot washer",
+      "apprentice": "Apprentice",
+      "relief_cook": "Relief cook"
+    },
+    "shiftNames": {
+      "standard_morning_shift": "Standard morning shift",
+      "long_shift": "Long shift",
+      "medium_shift": "Medium shift",
+      "late_shift": "Late shift"
+    },
+    "notifications": {
+      "resourceCreated": "Resource created successfully.",
+      "resourceUpdated": "Resource updated.",
+      "resourceDeleted": "Resource removed.",
+      "shiftCreated": "Shift created successfully.",
+      "shiftUpdated": "Shift updated.",
+      "shiftDeleted": "Shift removed."
+    }
   },
   "summary": {
     "title": "Hours Summary",
-    "hours": "{{worked}} h worked / {{contract}} h contract"
+    "hours": "{{worked}} h worked / {{contract}} h contract",
+    "onTrack": "On track",
+    "overTarget": "+{{hours}} h",
+    "underTarget": "{{hours}} h remaining"
   },
   "violations": {
     "title": "Constraint Violations",
     "none": "All constraints satisfied for this scenario."
+  },
+  "common": {
+    "cancel": "Cancel",
+    "save": "Save",
+    "create": "Create",
+    "unexpectedError": "An unexpected error occurred."
   }
 }
