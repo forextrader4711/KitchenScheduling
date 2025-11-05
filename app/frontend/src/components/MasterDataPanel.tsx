@@ -15,12 +15,14 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   IconButton,
   MenuItem,
   Slide,
   Snackbar,
   SlideProps,
   Stack,
+  Switch,
   Tab,
   Tabs,
   Table,
@@ -36,7 +38,7 @@ import { useTranslation } from "react-i18next";
 
 import api from "../services/api";
 import useScheduleStore from "../state/scheduleStore";
-import { Resource, Shift } from "../types";
+import { Resource, ResourceAbsence, Shift, WeeklyAvailabilityEntry } from "../types";
 
 type NotifyPayload = { message: string; severity: "success" | "error" };
 
@@ -50,9 +52,35 @@ type ResourceDto = {
   vacation_days?: string | null;
   language: string;
   notes?: string | null;
+  availability_template?: WeeklyAvailabilityEntryDto[] | null;
+  preferred_shift_codes?: number[] | null;
+  undesired_shift_codes?: number[] | null;
+  absences?: ResourceAbsenceDto[];
 };
 
-type ResourcePayload = Omit<ResourceDto, "id">;
+type WeeklyAvailabilityEntryDto = {
+  day: string;
+  is_available: boolean;
+  start_time?: string | null;
+  end_time?: string | null;
+};
+
+type ResourceAbsenceDto = {
+  id: number;
+  start_date: string;
+  end_date: string;
+  absence_type: "vacation" | "sick_leave" | "training" | "other";
+  comment?: string | null;
+};
+
+type ResourcePayload = Omit<ResourceDto, "id" | "absences">;
+
+type AbsenceFormState = {
+  startDate: string;
+  endDate: string;
+  absenceType: ResourceAbsence["absenceType"];
+  comment: string;
+};
 
 type ShiftDto = {
   code: number;
@@ -71,7 +99,26 @@ const toResource = (dto: ResourceDto): Resource => ({
   preferredDaysOff: dto.preferred_days_off,
   vacationDays: dto.vacation_days,
   language: dto.language,
-  notes: dto.notes
+  notes: dto.notes,
+  availabilityTemplate: dto.availability_template
+    ? dto.availability_template.map((entry) => ({
+        day: entry.day as WeeklyAvailabilityEntry["day"],
+        isAvailable: entry.is_available,
+        startTime: entry.start_time ?? undefined,
+        endTime: entry.end_time ?? undefined
+      }))
+    : undefined,
+  preferredShiftCodes: dto.preferred_shift_codes ?? undefined,
+  undesiredShiftCodes: dto.undesired_shift_codes ?? undefined,
+  absences: dto.absences
+    ? dto.absences.map((absence) => ({
+        id: absence.id,
+        startDate: absence.start_date,
+        endDate: absence.end_date,
+        absenceType: absence.absence_type,
+        comment: absence.comment ?? undefined
+      }))
+    : []
 });
 
 const toResourcePayload = (resource: Resource): ResourcePayload => ({
@@ -82,7 +129,17 @@ const toResourcePayload = (resource: Resource): ResourcePayload => ({
   preferred_days_off: resource.preferredDaysOff ?? null,
   vacation_days: resource.vacationDays ?? null,
   language: resource.language,
-  notes: resource.notes ?? null
+  notes: resource.notes ?? null,
+  availability_template: resource.availabilityTemplate
+    ? resource.availabilityTemplate.map((entry) => ({
+        day: entry.day,
+        is_available: entry.isAvailable,
+        start_time: entry.startTime ?? null,
+        end_time: entry.endTime ?? null
+      }))
+    : null,
+  preferred_shift_codes: resource.preferredShiftCodes ?? null,
+  undesired_shift_codes: resource.undesiredShiftCodes ?? null
 });
 
 const toShift = (dto: ShiftDto): Shift => ({
@@ -104,6 +161,159 @@ const toSlug = (value: string) =>
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_|_$/g, "");
+
+const defaultAvailabilityTemplate = (): WeeklyAvailabilityEntry[] => [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday"
+].map((day) => ({
+  day: day as WeeklyAvailabilityEntry["day"],
+  isAvailable: day !== "saturday" && day !== "sunday",
+  startTime: null,
+  endTime: null
+}));
+
+const ABSENCE_TYPES: Array<ResourceAbsence["absenceType"]> = [
+  "vacation",
+  "sick_leave",
+  "training",
+  "other"
+];
+
+const parseShiftCodes = (input: string): number[] => {
+  return input
+    .split(/[\s,;]+/)
+    .map((code) => code.trim())
+    .filter(Boolean)
+    .map((value) => Number.parseInt(value, 10))
+    .filter((code) => !Number.isNaN(code));
+};
+
+const formatShiftCodes = (codes?: number[] | null): string => {
+  if (!codes || codes.length === 0) {
+    return "";
+  }
+  return codes.join(", ");
+};
+
+const mapAbsenceDto = (dto: ResourceAbsenceDto): ResourceAbsence => ({
+  id: dto.id,
+  startDate: dto.start_date,
+  endDate: dto.end_date,
+  absenceType: dto.absence_type,
+  comment: dto.comment ?? undefined
+});
+
+const dayOrder: WeeklyAvailabilityEntry["day"][] = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday"
+];
+
+const AvailabilityEditor = ({
+  value,
+  onChange
+}: {
+  value: WeeklyAvailabilityEntry[];
+  onChange: (entries: WeeklyAvailabilityEntry[]) => void;
+}) => {
+  const { t } = useTranslation();
+
+  const upsertEntry = (day: WeeklyAvailabilityEntry["day"], updater: (entry: WeeklyAvailabilityEntry) => WeeklyAvailabilityEntry) => {
+    const entriesMap = new Map(value.map((entry) => [entry.day, entry] as const));
+    const current = entriesMap.get(day) ?? {
+      day,
+      isAvailable: true,
+      startTime: null,
+      endTime: null
+    };
+    entriesMap.set(day, updater(current));
+    onChange(dayOrder.map((d) => entriesMap.get(d) ?? {
+      day: d,
+      isAvailable: false,
+      startTime: null,
+      endTime: null
+    }));
+  };
+
+  return (
+    <Stack spacing={1.5} mt={1}>
+      {dayOrder.map((day) => {
+        const entry = value.find((item) => item.day === day) ?? {
+          day,
+          isAvailable: day !== "saturday" && day !== "sunday",
+          startTime: null,
+          endTime: null
+        };
+        return (
+          <Box
+            key={day}
+            sx={{
+              p: 1.5,
+              border: "1px solid rgba(51, 88, 255, 0.1)",
+              borderRadius: 2,
+              bgcolor: entry.isAvailable ? "rgba(51, 88, 255, 0.06)" : "transparent"
+            }}
+          >
+            <Stack direction="row" spacing={2} alignItems="center" justifyContent="space-between">
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={entry.isAvailable}
+                    onChange={(event) =>
+                      upsertEntry(day, (current) => ({
+                        ...current,
+                        isAvailable: event.target.checked,
+                        startTime: event.target.checked ? current.startTime : null,
+                        endTime: event.target.checked ? current.endTime : null
+                      }))
+                    }
+                    color="primary"
+                  />
+                }
+                label={t(`common.weekdays.${day}`)}
+              />
+              {entry.isAvailable && (
+                <Stack direction="row" spacing={2} sx={{ minWidth: 220 }}>
+                  <TextField
+                    label={t("masterData.availability.startTime")}
+                    type="time"
+                    value={entry.startTime ?? ""}
+                    onChange={(event) =>
+                      upsertEntry(day, (current) => ({ ...current, startTime: event.target.value || null }))
+                    }
+                    size="small"
+                    fullWidth
+                    InputLabelProps={{ shrink: true }}
+                  />
+                  <TextField
+                    label={t("masterData.availability.endTime")}
+                    type="time"
+                    value={entry.endTime ?? ""}
+                    onChange={(event) =>
+                      upsertEntry(day, (current) => ({ ...current, endTime: event.target.value || null }))
+                    }
+                    size="small"
+                    fullWidth
+                    InputLabelProps={{ shrink: true }}
+                  />
+                </Stack>
+              )}
+            </Stack>
+          </Box>
+        );
+      })}
+    </Stack>
+  );
+};
 
 const MasterDataPanel = () => {
   const { t } = useTranslation();
@@ -191,7 +401,21 @@ const ResourceManager = ({ onNotify }: { onNotify: (payload: NotifyPayload) => v
     preferredDaysOff: "",
     vacationDays: "",
     language: "en",
-    notes: ""
+    notes: "",
+    availabilityTemplate: defaultAvailabilityTemplate(),
+    preferredShiftCodes: [],
+    undesiredShiftCodes: [],
+    absences: []
+  });
+  const [absenceDialogOpen, setAbsenceDialogOpen] = useState(false);
+  const [absenceDraft, setAbsenceDraft] = useState<AbsenceFormState>(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return {
+      startDate: today,
+      endDate: today,
+      absenceType: "vacation",
+      comment: ""
+    };
   });
 
   const { data: resourceDtos = [], isLoading } = useQuery<ResourceDto[]>(["resources"], async () => {
@@ -214,7 +438,15 @@ const ResourceManager = ({ onNotify }: { onNotify: (payload: NotifyPayload) => v
 
   const resetForm = (resource?: Resource | null) => {
     if (resource) {
-      setFormState(resource);
+      setFormState({
+        ...resource,
+        availabilityTemplate: resource.availabilityTemplate
+          ? resource.availabilityTemplate.map((entry) => ({ ...entry }))
+          : defaultAvailabilityTemplate(),
+        preferredShiftCodes: resource.preferredShiftCodes ? [...resource.preferredShiftCodes] : [],
+        undesiredShiftCodes: resource.undesiredShiftCodes ? [...resource.undesiredShiftCodes] : [],
+        absences: resource.absences ? [...resource.absences] : []
+      });
       setEditingResource(resource);
     } else {
       setFormState({
@@ -226,9 +458,82 @@ const ResourceManager = ({ onNotify }: { onNotify: (payload: NotifyPayload) => v
         preferredDaysOff: "",
         vacationDays: "",
         language: "en",
-        notes: ""
+        notes: "",
+        availabilityTemplate: defaultAvailabilityTemplate(),
+        preferredShiftCodes: [],
+        undesiredShiftCodes: [],
+        absences: []
       });
       setEditingResource(null);
+    }
+  };
+
+  const handleOpenAbsenceDialog = () => {
+    if (!editingResource) {
+      return;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    setAbsenceDraft({ startDate: today, endDate: today, absenceType: "vacation", comment: "" });
+    setAbsenceDialogOpen(true);
+  };
+
+  const handleAbsenceFieldChange = <K extends keyof AbsenceFormState>(key: K, value: AbsenceFormState[K]) => {
+    setAbsenceDraft((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleSaveAbsence = async () => {
+    if (!editingResource) {
+      return;
+    }
+    try {
+      const response = await api.post<ResourceAbsenceDto>(
+        `resources/${editingResource.id}/absences`,
+        {
+          start_date: absenceDraft.startDate,
+          end_date: absenceDraft.endDate,
+          absence_type: absenceDraft.absenceType,
+          comment: absenceDraft.comment || null
+        }
+      );
+      const saved = mapAbsenceDto(response.data);
+      setFormState((prev) =>
+        prev
+          ? {
+              ...prev,
+              absences: [...(prev.absences ?? []), saved]
+            }
+          : prev
+      );
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      handleNotify({ message: t("masterData.notifications.absenceCreated"), severity: "success" });
+      setAbsenceDialogOpen(false);
+      void queryClient.invalidateQueries(["resources"]);
+    } catch (error) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      handleNotify({ message: t("common.unexpectedError"), severity: "error" });
+    }
+  };
+
+  const handleRemoveAbsence = async (absenceId: number) => {
+    if (!editingResource) {
+      return;
+    }
+    try {
+      await api.delete(`resources/${editingResource.id}/absences/${absenceId}`);
+      setFormState((prev) =>
+        prev
+          ? {
+              ...prev,
+              absences: prev.absences?.filter((absence) => absence.id !== absenceId) ?? []
+            }
+          : prev
+      );
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      handleNotify({ message: t("masterData.notifications.absenceDeleted"), severity: "success" });
+      void queryClient.invalidateQueries(["resources"]);
+    } catch (error) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      handleNotify({ message: t("common.unexpectedError"), severity: "error" });
     }
   };
 
@@ -478,12 +783,138 @@ const ResourceManager = ({ onNotify }: { onNotify: (payload: NotifyPayload) => v
               multiline
               minRows={2}
             />
+            <TextField
+              label={t("masterData.form.preferredShifts")}
+              value={formatShiftCodes(formState.preferredShiftCodes)}
+              onChange={(event) =>
+                setFormState((prev) => ({
+                  ...prev,
+                  preferredShiftCodes: parseShiftCodes(event.target.value)
+                }))
+              }
+              fullWidth
+              helperText={t("masterData.form.preferredShiftsHint")}
+            />
+            <TextField
+              label={t("masterData.form.undesiredShifts")}
+              value={formatShiftCodes(formState.undesiredShiftCodes)}
+              onChange={(event) =>
+                setFormState((prev) => ({
+                  ...prev,
+                  undesiredShiftCodes: parseShiftCodes(event.target.value)
+                }))
+              }
+              fullWidth
+              helperText={t("masterData.form.undesiredShiftsHint")}
+            />
+          </Stack>
+          <Box mt={3}>
+            <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+              {t("masterData.availability.heading")}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              {t("masterData.availability.helper")}
+            </Typography>
+            <AvailabilityEditor
+              value={formState.availabilityTemplate ?? defaultAvailabilityTemplate()}
+              onChange={(entries) =>
+                setFormState((prev) => ({ ...prev, availabilityTemplate: entries }))
+              }
+            />
+          </Box>
+          <Box mt={3}>
+            <Stack direction="row" justifyContent="space-between" alignItems="center">
+              <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                {t("masterData.absences.heading")}
+              </Typography>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={handleOpenAbsenceDialog}
+                disabled={!editingResource}
+              >
+                {t("masterData.absences.add")}
+              </Button>
+            </Stack>
+            {formState.absences && formState.absences.length > 0 ? (
+              <Stack direction="row" spacing={1} flexWrap="wrap" mt={2} useFlexGap>
+                {formState.absences.map((absence) => (
+                  <Chip
+                    key={absence.id}
+                    label={`${new Date(absence.startDate).toLocaleDateString()} → ${new Date(
+                      absence.endDate
+                    ).toLocaleDateString()} · ${t(`masterData.absenceTypes.${absence.absenceType}`)}`}
+                    onDelete={() => void handleRemoveAbsence(absence.id)}
+                    color="secondary"
+                    variant="outlined"
+                    sx={{ mb: 1 }}
+                  />
+                ))}
+              </Stack>
+            ) : (
+              <Typography variant="body2" color="text.secondary" mt={1.5}>
+                {t("masterData.absences.empty")}
+              </Typography>
+            )}
+          </Box>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={handleCloseDialog}>{t("common.cancel")}</Button>
+          <Button onClick={handleSubmit} variant="contained">
+            {editingResource ? t("common.save") : t("common.create")}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={absenceDialogOpen} onClose={() => setAbsenceDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>{t("masterData.absences.addTitle")}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <TextField
+              label={t("masterData.absences.startDate")}
+              type="date"
+              value={absenceDraft.startDate}
+              onChange={(event) => handleAbsenceFieldChange("startDate", event.target.value)}
+              InputLabelProps={{ shrink: true }}
+            />
+            <TextField
+              label={t("masterData.absences.endDate")}
+              type="date"
+              value={absenceDraft.endDate}
+              onChange={(event) => handleAbsenceFieldChange("endDate", event.target.value)}
+              InputLabelProps={{ shrink: true }}
+            />
+            <TextField
+              select
+              label={t("masterData.absences.type")}
+              value={absenceDraft.absenceType}
+              onChange={(event) =>
+                handleAbsenceFieldChange(
+                  "absenceType",
+                  event.target.value as ResourceAbsence["absenceType"]
+                )
+              }
+            >
+              {ABSENCE_TYPES.map((type) => (
+                <MenuItem key={type} value={type}>
+                  {t(`masterData.absenceTypes.${type}`)}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              label={t("masterData.absences.comment")}
+              value={absenceDraft.comment}
+              onChange={(event) => handleAbsenceFieldChange("comment", event.target.value)}
+              fullWidth
+              multiline
+              minRows={2}
+            />
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseDialog}>{t("common.cancel")}</Button>
-          <Button onClick={handleSubmit} variant="contained">
-            {editingResource ? t("common.save") : t("common.create")}
+          <Button onClick={() => setAbsenceDialogOpen(false)}>{t("common.cancel")}</Button>
+          <Button onClick={() => void handleSaveAbsence()} variant="contained" disabled={!editingResource}>
+            {t("masterData.absences.save")}
           </Button>
         </DialogActions>
       </Dialog>

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
+import sqlalchemy as sa
+
 from sqlalchemy import Enum as SqlEnum
-from sqlalchemy import ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from kitchen_scheduler.db.base import Base
@@ -33,8 +36,14 @@ class Resource(Base):
     vacation_days: Mapped[Optional[str]] = mapped_column(Text)
     language: Mapped[str] = mapped_column(String(5), default="en")
     notes: Mapped[Optional[str]] = mapped_column(Text)
+    availability_template: Mapped[Optional[dict]] = mapped_column(JSON, default=None)
+    preferred_shift_codes: Mapped[Optional[list[int]]] = mapped_column(JSON, default=None)
+    undesired_shift_codes: Mapped[Optional[list[int]]] = mapped_column(JSON, default=None)
 
     planning_entries: Mapped[list["PlanningEntry"]] = relationship(
+        back_populates="resource", cascade="all, delete-orphan"
+    )
+    absences: Mapped[list["ResourceAbsence"]] = relationship(
         back_populates="resource", cascade="all, delete-orphan"
     )
 
@@ -58,3 +67,18 @@ class ShiftPrimeRule(Base):
     allowed: Mapped[bool] = mapped_column(default=True)
 
     shift: Mapped[Shift] = relationship(back_populates="prime_rule")
+
+
+class ResourceAbsence(Base):
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    resource_id: Mapped[int] = mapped_column(ForeignKey("resource.id", ondelete="CASCADE"), index=True)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    absence_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    comment: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=sa.func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=sa.func.now(), onupdate=sa.func.now(), nullable=False
+    )
+
+    resource: Mapped[Resource] = relationship(back_populates="absences")

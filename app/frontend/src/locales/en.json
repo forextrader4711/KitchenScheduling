@@ -50,11 +50,32 @@
       "vacationDays": "Vacation days",
       "language": "Language",
       "notes": "Notes",
+      "preferredShifts": "Preferred shift codes",
+      "preferredShiftsHint": "Comma-separated list of shift codes the resource prefers.",
+      "undesiredShifts": "Undesired shift codes",
+      "undesiredShiftsHint": "Comma-separated list of shift codes the resource should avoid.",
       "code": "Code",
       "description": "Description",
       "start": "Start",
       "end": "End",
       "hours": "Hours"
+    },
+    "availability": {
+      "heading": "Weekly availability",
+      "helper": "Toggle which weekdays the resource can work and optionally set preferred time ranges.",
+      "startTime": "Start time",
+      "endTime": "End time"
+    },
+    "absences": {
+      "heading": "Approved absences",
+      "add": "Add absence",
+      "addTitle": "Add absence",
+      "empty": "No absences recorded.",
+      "startDate": "Start date",
+      "endDate": "End date",
+      "type": "Absence type",
+      "comment": "Comment",
+      "save": "Save absence"
     },
     "roles": {
       "cook": "Cook",
@@ -70,12 +91,20 @@
       "late_shift": "Late shift"
     },
     "notifications": {
-      "resourceCreated": "Resource created successfully.",
-      "resourceUpdated": "Resource updated.",
-      "resourceDeleted": "Resource removed.",
-      "shiftCreated": "Shift created successfully.",
-      "shiftUpdated": "Shift updated.",
-      "shiftDeleted": "Shift removed."
+    "resourceCreated": "Resource created successfully.",
+    "resourceUpdated": "Resource updated.",
+    "resourceDeleted": "Resource removed.",
+    "shiftCreated": "Shift created successfully.",
+    "shiftUpdated": "Shift updated.",
+    "shiftDeleted": "Shift removed.",
+    "absenceCreated": "Absence recorded.",
+    "absenceDeleted": "Absence removed."
+    },
+    "absenceTypes": {
+      "vacation": "Vacation",
+      "sick_leave": "Sick leave",
+      "training": "Training",
+      "other": "Other"
     }
   },
   "summary": {
@@ -93,6 +122,15 @@
     "cancel": "Cancel",
     "save": "Save",
     "create": "Create",
-    "unexpectedError": "An unexpected error occurred."
+    "unexpectedError": "An unexpected error occurred.",
+    "weekdays": {
+      "monday": "Monday",
+      "tuesday": "Tuesday",
+      "wednesday": "Wednesday",
+      "thursday": "Thursday",
+      "friday": "Friday",
+      "saturday": "Saturday",
+      "sunday": "Sunday"
+    }
   }
 }

@@ -1,12 +1,15 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from kitchen_scheduler.core.config import Settings, get_settings
 from kitchen_scheduler.db.session import get_db_session
 from kitchen_scheduler.repositories import system as system_repo
 from kitchen_scheduler.schemas.system import (
+    HolidayRead,
     MonthlyParametersCreate,
     MonthlyParametersRead,
     MonthlyParametersUpdate,
@@ -15,6 +18,7 @@ from kitchen_scheduler.schemas.system import (
     SchedulingRuleConfigUpdate,
 )
 from kitchen_scheduler.services.rules import SchedulingRules, load_default_rules
+from kitchen_scheduler.services.holidays import get_vaud_public_holidays
 
 router = APIRouter()
 
@@ -101,6 +105,13 @@ async def read_active_rules(
         config = await system_repo.create_rule_config(session, payload)
         await session.commit()
     return _map_rule_config(config)
+
+
+@router.get("/holidays", response_model=list[HolidayRead])
+async def list_holidays(year: int | None = Query(default=None)) -> list[HolidayRead]:
+    target_year = year or datetime.utcnow().year
+    holidays = get_vaud_public_holidays(target_year)
+    return [HolidayRead.model_validate(item) for item in holidays]
 
 
 @router.post("/rules", response_model=SchedulingRuleConfigRead, status_code=status.HTTP_201_CREATED)

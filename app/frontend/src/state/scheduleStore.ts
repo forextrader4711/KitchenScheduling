@@ -1,7 +1,14 @@
 import { create } from "zustand";
 
 import api from "../services/api";
-import { PlanningEntry, Resource, SummaryItem, ViolationItem } from "../types";
+import {
+  PlanningEntry,
+  Resource,
+  ResourceAbsence,
+  SummaryItem,
+  ViolationItem,
+  WeeklyAvailabilityEntry
+} from "../types";
 
 type ResourceDto = {
   id: number;
@@ -13,6 +20,25 @@ type ResourceDto = {
   vacation_days?: string | null;
   language: string;
   notes?: string | null;
+  availability_template?: WeeklyAvailabilityEntryDto[] | null;
+  preferred_shift_codes?: number[] | null;
+  undesired_shift_codes?: number[] | null;
+  absences?: ResourceAbsenceDto[];
+};
+
+type WeeklyAvailabilityEntryDto = {
+  day: string;
+  is_available: boolean;
+  start_time?: string | null;
+  end_time?: string | null;
+};
+
+type ResourceAbsenceDto = {
+  id: number;
+  start_date: string;
+  end_date: string;
+  absence_type: "vacation" | "sick_leave" | "training" | "other";
+  comment?: string | null;
 };
 
 type PlanningEntryDto = {
@@ -39,6 +65,33 @@ type PlanScenarioDto = {
   violations?: PlanViolationDto[];
 };
 
+const normalizeWeeklyAvailability = (
+  entries?: WeeklyAvailabilityEntryDto[] | null
+): WeeklyAvailabilityEntry[] | undefined => {
+  if (!entries) {
+    return undefined;
+  }
+  return entries.map((entry) => ({
+    day: entry.day as WeeklyAvailabilityEntry["day"],
+    isAvailable: entry.is_available,
+    startTime: entry.start_time ?? undefined,
+    endTime: entry.end_time ?? undefined
+  }));
+};
+
+const normalizeAbsences = (absences?: ResourceAbsenceDto[] | null): ResourceAbsence[] | undefined => {
+  if (!absences) {
+    return undefined;
+  }
+  return absences.map((absence) => ({
+    id: absence.id,
+    startDate: absence.start_date,
+    endDate: absence.end_date,
+    absenceType: absence.absence_type,
+    comment: absence.comment ?? undefined
+  }));
+};
+
 interface ScheduleState {
   month: string | null;
   isLoading: boolean;
@@ -56,7 +109,11 @@ const fallbackResources: Resource[] = [
     role: "cook",
     availabilityPercent: 100,
     contractHoursPerMonth: 160,
-    language: "fr"
+    language: "fr",
+    availabilityTemplate: undefined,
+    preferredShiftCodes: undefined,
+    undesiredShiftCodes: undefined,
+    absences: []
   },
   {
     id: 2,
@@ -64,7 +121,11 @@ const fallbackResources: Resource[] = [
     role: "kitchen_assistant",
     availabilityPercent: 80,
     contractHoursPerMonth: 128,
-    language: "fr"
+    language: "fr",
+    availabilityTemplate: undefined,
+    preferredShiftCodes: undefined,
+    undesiredShiftCodes: undefined,
+    absences: []
   }
 ];
 
@@ -126,7 +187,11 @@ const useScheduleStore = create<ScheduleState>((set) => ({
         preferredDaysOff: item.preferred_days_off,
         vacationDays: item.vacation_days,
         language: item.language,
-        notes: item.notes
+        notes: item.notes,
+        availabilityTemplate: normalizeWeeklyAvailability(item.availability_template),
+        preferredShiftCodes: item.preferred_shift_codes ?? undefined,
+        undesiredShiftCodes: item.undesired_shift_codes ?? undefined,
+        absences: normalizeAbsences(item.absences)
       }));
 
       const entries: PlanningEntry[] = planResponse.data.entries.map((entry) => ({

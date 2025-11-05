@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import date
 from typing import Literal
 
@@ -36,6 +38,9 @@ class ResourceBase(BaseModel):
     vacation_days: str | None = None
     language: str = "en"
     notes: str | None = None
+    availability_template: list["WeeklyAvailabilityEntry"] | None = None
+    preferred_shift_codes: list[int] | None = None
+    undesired_shift_codes: list[int] | None = None
 
 
 class ResourceCreate(ResourceBase):
@@ -44,6 +49,7 @@ class ResourceCreate(ResourceBase):
 
 class ResourceRead(ResourceBase):
     id: int
+    absences: list["ResourceAbsenceRead"] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -57,6 +63,9 @@ class ResourceUpdate(BaseModel):
     vacation_days: str | None = None
     language: str | None = None
     notes: str | None = None
+    availability_template: list["WeeklyAvailabilityEntry"] | None = None
+    preferred_shift_codes: list[int] | None = None
+    undesired_shift_codes: list[int] | None = None
 
 
 class PlanningEntryBase(BaseModel):
@@ -71,3 +80,39 @@ class PlanningEntryRead(PlanningEntryBase):
     id: int
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class WeeklyAvailabilityEntry(BaseModel):
+    day: Literal[
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
+    ]
+    is_available: bool = True
+    start_time: str | None = None
+    end_time: str | None = None
+
+
+class ResourceAbsenceBase(BaseModel):
+    start_date: date
+    end_date: date
+    absence_type: Literal["vacation", "sick_leave", "training", "other"] = "vacation"
+    comment: str | None = None
+
+
+class ResourceAbsenceCreate(ResourceAbsenceBase):
+    pass
+
+
+class ResourceAbsenceRead(ResourceAbsenceBase):
+    id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ResourceAbsencePatch(BaseModel):
+    start_date: date | None = None
+    end_date: date | None = None
+    absence_type: Literal["vacation", "sick_leave", "training", "other"] | None = None
+    comment: str | None = None
+
+
+ResourceRead.model_rebuild()

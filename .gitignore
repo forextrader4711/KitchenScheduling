@@ -9,6 +9,7 @@ __pycache__/
 app/backend/.venv/
 app/backend/.env
 app/backend/build/
+app/backend/kitchen_scheduler.db
 
 # Frontend
 app/frontend/node_modules/

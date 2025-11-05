@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from kitchen_scheduler.services.rules import SchedulingRules
 
@@ -52,3 +52,10 @@ class SchedulingRuleConfigUpdate(BaseModel):
     version: str | None = None
     rules: SchedulingRules | None = None
     is_active: bool | None = None
+
+
+class HolidayRead(BaseModel):
+    code: str
+    date: date
+    name: str
+    localized_name: str

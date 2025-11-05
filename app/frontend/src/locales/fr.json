@@ -50,11 +50,32 @@
       "vacationDays": "Jours de congé",
       "language": "Langue",
       "notes": "Notes",
+      "preferredShifts": "Shifts favoris",
+      "preferredShiftsHint": "Liste de codes shift séparés par des virgules privilégiés par la ressource.",
+      "undesiredShifts": "Shifts à éviter",
+      "undesiredShiftsHint": "Liste de codes shift séparés par des virgules à éviter.",
       "code": "Code",
       "description": "Description",
       "start": "Début",
       "end": "Fin",
       "hours": "Heures"
+    },
+    "availability": {
+      "heading": "Disponibilités hebdomadaires",
+      "helper": "Activez les jours de présence et, si besoin, indiquez des plages horaires.",
+      "startTime": "Heure de début",
+      "endTime": "Heure de fin"
+    },
+    "absences": {
+      "heading": "Absences approuvées",
+      "add": "Ajouter une absence",
+      "addTitle": "Ajouter une absence",
+      "empty": "Aucune absence enregistrée.",
+      "startDate": "Date de début",
+      "endDate": "Date de fin",
+      "type": "Type d'absence",
+      "comment": "Commentaire",
+      "save": "Enregistrer l'absence"
     },
     "roles": {
       "cook": "Chef de partie",
@@ -75,7 +96,15 @@
       "resourceDeleted": "Ressource supprimée.",
       "shiftCreated": "Shift créé.",
       "shiftUpdated": "Shift mis à jour.",
-      "shiftDeleted": "Shift supprimé."
+      "shiftDeleted": "Shift supprimé.",
+      "absenceCreated": "Absence enregistrée.",
+      "absenceDeleted": "Absence supprimée."
+    },
+    "absenceTypes": {
+      "vacation": "Vacances",
+      "sick_leave": "Maladie",
+      "training": "Formation",
+      "other": "Autre"
     }
   },
   "summary": {
@@ -93,6 +122,15 @@
     "cancel": "Annuler",
     "save": "Enregistrer",
     "create": "Créer",
-    "unexpectedError": "Une erreur inattendue est survenue."
+    "unexpectedError": "Une erreur inattendue est survenue.",
+    "weekdays": {
+      "monday": "Lundi",
+      "tuesday": "Mardi",
+      "wednesday": "Mercredi",
+      "thursday": "Jeudi",
+      "friday": "Vendredi",
+      "saturday": "Samedi",
+      "sunday": "Dimanche"
+    }
   }
 }

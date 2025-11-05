@@ -8,6 +8,25 @@ export interface Resource {
   vacationDays?: string | null;
   language: string;
   notes?: string | null;
+  availabilityTemplate?: WeeklyAvailabilityEntry[] | null;
+  preferredShiftCodes?: number[] | null;
+  undesiredShiftCodes?: number[] | null;
+  absences?: ResourceAbsence[];
+}
+
+export interface WeeklyAvailabilityEntry {
+  day: "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
+  isAvailable: boolean;
+  startTime?: string | null;
+  endTime?: string | null;
+}
+
+export interface ResourceAbsence {
+  id: number;
+  startDate: string;
+  endDate: string;
+  absenceType: "vacation" | "sick_leave" | "training" | "other";
+  comment?: string | null;
 }
 
 export interface PlanningEntry {
