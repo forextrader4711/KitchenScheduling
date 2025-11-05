@@ -504,13 +504,11 @@ const ResourceManager = ({ onNotify }: { onNotify: (payload: NotifyPayload) => v
             }
           : prev
       );
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-      handleNotify({ message: t("masterData.notifications.absenceCreated"), severity: "success" });
+      onNotify({ message: t("masterData.notifications.absenceCreated"), severity: "success" });
       setAbsenceDialogOpen(false);
       void queryClient.invalidateQueries(["resources"]);
     } catch (error) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-      handleNotify({ message: t("common.unexpectedError"), severity: "error" });
+      onNotify({ message: t("common.unexpectedError"), severity: "error" });
     }
   };
 
@@ -528,12 +526,10 @@ const ResourceManager = ({ onNotify }: { onNotify: (payload: NotifyPayload) => v
             }
           : prev
       );
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-      handleNotify({ message: t("masterData.notifications.absenceDeleted"), severity: "success" });
+      onNotify({ message: t("masterData.notifications.absenceDeleted"), severity: "success" });
       void queryClient.invalidateQueries(["resources"]);
     } catch (error) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
-      handleNotify({ message: t("common.unexpectedError"), severity: "error" });
+      onNotify({ message: t("common.unexpectedError"), severity: "error" });
     }
   };
 

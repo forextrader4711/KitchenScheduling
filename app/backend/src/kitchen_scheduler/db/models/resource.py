@@ -28,7 +28,13 @@ class Resource(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     role: Mapped[ResourceRole] = mapped_column(
-        SqlEnum(ResourceRole, name="resourcerole", create_type=False), nullable=False
+        SqlEnum(
+            ResourceRole,
+            name="resourcerole",
+            create_type=False,
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        nullable=False,
     )
     availability_percent: Mapped[int] = mapped_column(Integer, default=100)
     contract_hours_per_month: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)

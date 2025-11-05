@@ -39,6 +39,10 @@ class PlanViolation(BaseModel):
     message: str
     severity: Literal["info", "warning", "critical"] = "warning"
     meta: dict[str, Any] = Field(default_factory=dict)
+    scope: Literal["schedule", "day", "resource", "week", "month"] = "schedule"
+    day: str | None = None
+    resource_id: int | None = None
+    iso_week: str | None = None
 
 
 class PlanGenerationResponse(BaseModel):
@@ -56,3 +60,38 @@ class PlanVersionRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class PlanScenarioSummary(BaseModel):
+    id: int
+    month: str
+    name: str
+    status: str
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlanInsightItem(BaseModel):
+    severity: Literal["info", "warning", "critical"]
+    violations: list[PlanViolation] = Field(default_factory=list)
+
+
+class PlanInsights(BaseModel):
+    daily: dict[str, PlanInsightItem] = Field(default_factory=dict)
+    resource: dict[int, PlanInsightItem] = Field(default_factory=dict)
+    weekly: dict[str, PlanInsightItem] = Field(default_factory=dict)
+    monthly: dict[str, PlanInsightItem] = Field(default_factory=dict)
+
+
+class PlanPhaseRead(BaseModel):
+    scenario: PlanScenarioSummary | None = None
+    entries: list[PlanningEntryRead] = Field(default_factory=list)
+    violations: list[PlanViolation] = Field(default_factory=list)
+    insights: PlanInsights = Field(default_factory=PlanInsights)
+
+
+class PlanOverviewResponse(BaseModel):
+    month: str
+    preparation: PlanPhaseRead | None = None
+    approved: PlanPhaseRead | None = None

@@ -47,9 +47,14 @@ export interface SummaryItem {
 
 export interface ViolationItem {
   id: string;
-  message: string;
   category: string;
   severity: "info" | "warning" | "critical";
+  message?: string;
+  meta?: Record<string, unknown>;
+  day?: string | null;
+  resourceId?: number | null;
+  isoWeek?: string | null;
+  rawMessage?: string;
 }
 
 export interface Shift {

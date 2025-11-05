@@ -2,6 +2,7 @@ import json
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from kitchen_scheduler.db.models.planning import PlanningEntry, PlanScenario, PlanVersion
 from kitchen_scheduler.schemas.planning import (
@@ -16,9 +17,36 @@ async def list_scenarios(session: AsyncSession) -> list[PlanScenario]:
     return list(result.scalars().all())
 
 
-async def get_scenario_by_month(session: AsyncSession, month: str) -> PlanScenario | None:
-    result = await session.execute(select(PlanScenario).where(PlanScenario.month == month))
+async def get_scenario_by_month(
+    session: AsyncSession, month: str, *, status: str | None = None
+) -> PlanScenario | None:
+    query = select(PlanScenario).where(PlanScenario.month == month)
+    if status:
+        query = query.where(PlanScenario.status == status)
+    result = await session.execute(query.order_by(PlanScenario.created_at.desc()))
     return result.scalars().first()
+
+
+async def ensure_scenario(
+    session: AsyncSession,
+    *,
+    month: str,
+    status: str,
+    name: str | None = None,
+) -> PlanScenario:
+    scenario = await get_scenario_by_month(session, month, status=status)
+    if scenario:
+        return scenario
+
+    scenario = PlanScenario(
+        month=month,
+        name=name or ("Draft Scenario" if status == "draft" else f"{status.title()} Plan"),
+        status=status,
+    )
+    session.add(scenario)
+    await session.flush()
+    await session.refresh(scenario)
+    return scenario
 
 
 async def store_plan_generation(
@@ -66,6 +94,31 @@ async def store_plan_generation(
     session.add(version)
 
     return scenario
+
+
+async def list_entries_for_scenario(
+    session: AsyncSession,
+    scenario_id: int,
+) -> list[PlanningEntry]:
+    result = await session.execute(
+        select(PlanningEntry)
+        .where(PlanningEntry.scenario_id == scenario_id)
+        .order_by(PlanningEntry.date.asc(), PlanningEntry.resource_id.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def preload_scenarios_for_month(
+    session: AsyncSession,
+    month: str,
+) -> list[PlanScenario]:
+    result = await session.execute(
+        select(PlanScenario)
+        .where(PlanScenario.month == month)
+        .options(selectinload(PlanScenario.entries))
+        .order_by(PlanScenario.created_at.desc())
+    )
+    return list(result.scalars().all())
 
 
 async def list_versions(session: AsyncSession, scenario_id: int) -> list[PlanVersion]:

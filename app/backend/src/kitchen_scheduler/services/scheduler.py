@@ -2,18 +2,54 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass, field
-from datetime import date, timedelta
-from typing import Iterable, Literal
+from datetime import date, datetime, timedelta
+from functools import lru_cache
+from typing import Iterable, Sequence, Literal, Optional
 
 from kitchen_scheduler.schemas.resource import PlanningEntryRead
 from kitchen_scheduler.services.rules import RuleSet
 
 
 @dataclass
+class AvailabilityWindow:
+    day: str
+    is_available: bool
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+
+
+@dataclass
+class AbsenceWindow:
+    start_date: date
+    end_date: date
+    absence_type: str
+    comment: Optional[str] = None
+
+
+@dataclass
+class SchedulingResource:
+    id: int
+    role: str
+    availability: list[AvailabilityWindow] = field(default_factory=list)
+    preferred_shift_codes: list[int] = field(default_factory=list)
+    undesired_shift_codes: list[int] = field(default_factory=list)
+    absences: list[AbsenceWindow] = field(default_factory=list)
+
+
+@dataclass
+class SchedulingShift:
+    code: int
+    description: str
+    start: str
+    end: str
+    hours: float
+
+
+@dataclass
 class SchedulingContext:
     month: str
-    resources: list[dict]
-    shifts: list[dict]
+    resources: list[SchedulingResource]
+    shifts: list[SchedulingShift]
     rules: RuleSet
 
 
@@ -23,6 +59,10 @@ class SchedulingViolation:
     message: str
     severity: Literal["info", "warning", "critical"] = "warning"
     meta: dict[str, str | int | float] = field(default_factory=dict)
+    scope: Literal["schedule", "day", "resource", "week", "month"] = "schedule"
+    day: date | None = None
+    resource_id: int | None = None
+    iso_week: str | None = None
 
 
 @dataclass
@@ -41,30 +81,60 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
     year, month = map(int, context.month.split("-"))
     day = date(year, month, 1)
     entries: list[PlanningEntryRead] = []
-    shift_codes = [shift["code"] for shift in context.shifts]
-    shift_count = len(shift_codes)
-
+    shift_count = len(context.shifts)
     resource_count = len(context.resources)
+
     if not resource_count or not shift_count:
         return SchedulingResult(entries=entries, violations=[])
 
-    idx = 0
+    uncovered_days: list[date] = []
+
+    resource_assignment_counts: dict[int, int] = {resource.id: 0 for resource in context.resources}
+    entry_id = 1
+
     while day.month == month:
-        resource = context.resources[idx % resource_count]
-        shift_code = shift_codes[idx % shift_count]
-        entries.append(
-            PlanningEntryRead(
-                id=idx + 1,
-                resource_id=resource["id"],
-                date=day,
-                shift_code=shift_code,
-                absence_type=None,
-                comment="AUTO-STUB",
+        available_resources: list[SchedulingResource] = []
+        for resource in context.resources:
+            if _get_absence(resource, day):
+                continue
+            if not _is_available(resource, day):
+                continue
+            available_resources.append(resource)
+
+        if not available_resources:
+            uncovered_days.append(day)
+        else:
+            for resource in available_resources:
+                assignment_idx = resource_assignment_counts.get(resource.id, 0)
+                chosen_shift = _select_shift_for_resource(resource, context.shifts, assignment_idx)
+                entries.append(
+                    PlanningEntryRead(
+                        id=entry_id,
+                        resource_id=resource.id,
+                        date=day,
+                        shift_code=chosen_shift.code if chosen_shift else None,
+                        absence_type=None,
+                        comment="AUTO-STUB",
+                    )
+                )
+                resource_assignment_counts[resource.id] = assignment_idx + 1
+                entry_id += 1
+
+        day += timedelta(days=1)
+    violations = evaluate_rule_violations(context, entries)
+
+    for missing_day in uncovered_days:
+        violations.append(
+            SchedulingViolation(
+                code="uncovered-day",
+                message=f"No available resource for {missing_day.isoformat()}",
+                severity="warning",
+                meta={"date": missing_day.isoformat()},
+                scope="day",
+                day=missing_day,
             )
         )
-        day += timedelta(days=1)
-        idx += 1
-    violations = evaluate_rule_violations(context, entries)
+
     return SchedulingResult(entries=entries, violations=violations)
 
 
@@ -81,12 +151,13 @@ def evaluate_rule_violations(
                 code="empty-schedule",
                 message="No planning entries were generated for the requested month.",
                 severity="warning",
+                scope="schedule",
             )
         )
         return violations
 
-    resource_role_map = {resource["id"]: resource["role"] for resource in context.resources}
-    shift_hours_map = {shift["code"]: float(shift.get("hours", 0)) for shift in context.shifts}
+    resource_role_map = {resource.id: resource.role for resource in context.resources}
+    shift_hours_map = {shift.code: float(shift.hours) for shift in context.shifts}
 
     _apply_staffing_rules(context, entries, resource_role_map, violations)
     _apply_working_time_rules(context, entries, shift_hours_map, violations)
@@ -121,6 +192,8 @@ def _apply_staffing_rules(
                     code="staffing-shortfall",
                     message=f"Only {count} resources assigned on {day}; minimum is {min_daily_staff}.",
                     severity="warning",
+                    scope="day",
+                    day=day,
                     meta={"date": day.isoformat(), "assigned": count, "required": min_daily_staff},
                 )
             )
@@ -133,6 +206,8 @@ def _apply_staffing_rules(
                         code="role-min-shortfall",
                         message=f"{role} minimum not met on {day}: assigned {assigned}, required {composition.min}.",
                         severity="critical",
+                        scope="day",
+                        day=day,
                         meta={"date": day.isoformat(), "role": role, "assigned": assigned, "min": composition.min},
                     )
                 )
@@ -142,6 +217,8 @@ def _apply_staffing_rules(
                         code="role-max-exceeded",
                         message=f"{role} maximum exceeded on {day}: assigned {assigned}, cap {composition.max}.",
                         severity="warning",
+                        scope="day",
+                        day=day,
                         meta={"date": day.isoformat(), "role": role, "assigned": assigned, "max": composition.max},
                     )
                 )
@@ -185,6 +262,9 @@ def _apply_working_time_rules(
                             f"{working_rules.max_hours_per_week}h."
                         ),
                         severity="critical",
+                        scope="week",
+                        resource_id=resource_id,
+                        iso_week=f"{iso_year}-W{iso_week:02d}",
                         meta={
                             "resource_id": resource_id,
                             "week": f"{iso_year}-W{iso_week}",
@@ -206,6 +286,9 @@ def _apply_working_time_rules(
                             f"limit is {working_rules.max_working_days_per_week}."
                         ),
                         severity="critical",
+                        scope="week",
+                        resource_id=resource_id,
+                        iso_week=f"{iso_year}-W{iso_week:02d}",
                         meta={
                             "resource_id": resource_id,
                             "week": f"{iso_year}-W{iso_week}",
@@ -224,6 +307,8 @@ def _apply_working_time_rules(
                     message=f"Resource {resource_id} works {max_streak} consecutive days; "
                     f"limit is {working_rules.max_consecutive_working_days}.",
                     severity="critical",
+                    scope="resource",
+                    resource_id=resource_id,
                     meta={"resource_id": resource_id, "streak": max_streak},
                 )
             )
@@ -235,6 +320,8 @@ def _apply_working_time_rules(
                     code="insufficient-consecutive-rest",
                     message=f"Resource {resource_id} does not have {required_off} consecutive days off in {context.month}.",
                     severity="warning",
+                    scope="resource",
+                    resource_id=resource_id,
                     meta={"resource_id": resource_id, "required_off": required_off},
                 )
             )
@@ -273,3 +360,37 @@ def _has_consecutive_days_off(month: str, sorted_dates: Iterable[date], required
         else:
             streak = 0
     return False
+def _select_shift_for_resource(
+    resource: SchedulingResource, shifts: Sequence[SchedulingShift], assignment_index: int
+) -> SchedulingShift | None:
+    if not shifts:
+        return None
+
+    filtered_shifts = [shift for shift in shifts if shift.code not in set(resource.undesired_shift_codes)]
+    preferred_shifts = [
+        shift for shift in filtered_shifts if shift.code in set(resource.preferred_shift_codes)
+    ]
+
+    candidate_pool = preferred_shifts or filtered_shifts or list(shifts)
+    return candidate_pool[assignment_index % len(candidate_pool)]
+
+
+def _get_absence(resource: SchedulingResource, day: date) -> AbsenceWindow | None:
+    for absence in resource.absences:
+        if absence.start_date <= day <= absence.end_date:
+            return absence
+    return None
+
+
+@lru_cache(maxsize=16)
+def _weekday_cache() -> tuple[str, ...]:
+    return ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+
+
+def _is_available(resource: SchedulingResource, day: date) -> bool:
+    weekday = _weekday_cache()[day.weekday()]
+    for window in resource.availability:
+        if window.day == weekday:
+            return window.is_available
+    # Default to available if no template defined
+    return True

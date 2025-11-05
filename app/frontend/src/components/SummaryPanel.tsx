@@ -15,7 +15,8 @@ import useScheduleStore from "../state/scheduleStore";
 
 const SummaryPanel = () => {
   const { t } = useTranslation();
-  const { summaries, resources } = useScheduleStore();
+  const { plans, activePhase, resources } = useScheduleStore();
+  const summaries = plans[activePhase]?.summaries ?? [];
 
   const resourceById = resources.reduce<Record<number, typeof resources[number]>>((acc, resource) => {
     acc[resource.id] = resource;
@@ -36,8 +37,13 @@ const SummaryPanel = () => {
         <Typography variant="h6" gutterBottom>
           {t("summary.title")}
         </Typography>
-        <Stack spacing={2}>
-          {summaries.map((summary) => {
+        {summaries.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">
+            {t("summary.empty", { defaultValue: "No hour summary available yet." })}
+          </Typography>
+        ) : (
+          <Stack spacing={2}>
+            {summaries.map((summary) => {
     const resource = resourceById[summary.resourceId];
     const delta = Math.round(summary.workedHours - summary.contractHours);
             const adherence =
@@ -108,8 +114,9 @@ const SummaryPanel = () => {
                 </Stack>
               </Paper>
             );
-          })}
-        </Stack>
+            })}
+          </Stack>
+        )}
       </CardContent>
     </Card>
   );

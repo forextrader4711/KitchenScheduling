@@ -21,11 +21,21 @@ import PlanningGrid from "./components/PlanningGrid";
 import MasterDataPanel from "./components/MasterDataPanel";
 import SummaryPanel from "./components/SummaryPanel";
 import ViolationsPanel from "./components/ViolationsPanel";
+import PlanningInsightsPanel from "./components/PlanningInsightsPanel";
 import useScheduleStore from "./state/scheduleStore";
 
 const App = () => {
   const { t, i18n } = useTranslation();
-  const { loadInitialData, month, resources, violations } = useScheduleStore();
+  const {
+    loadInitialData,
+    refreshPreparationPlan,
+    month,
+    resources,
+    plans,
+    activePhase,
+    setActivePhase,
+    isLoading
+  } = useScheduleStore();
   const [tab, setTab] = useState<"planning" | "masterData">("planning");
 
   useEffect(() => {
@@ -41,6 +51,10 @@ const App = () => {
     setTab(value);
   };
 
+  const handlePhaseChange = (_event: SyntheticEvent, value: "preparation" | "approved") => {
+    setActivePhase(value);
+  };
+
   const heroMonthLabel = useMemo(() => {
     if (!month) {
       return "";
@@ -51,6 +65,55 @@ const App = () => {
       year: "numeric"
     });
   }, [i18n.language, month]);
+
+  const preparationViolations = plans.preparation?.violations.length ?? 0;
+  const approvedPlan = plans.approved;
+  const statusChip =
+    activePhase === "preparation"
+      ? {
+          color: preparationViolations ? "warning" : "success",
+          label: preparationViolations
+            ? t("planning.preparationIssues", {
+                defaultValue: "{{count}} rule issues",
+                count: preparationViolations
+              })
+            : t("planning.preparationAllClear", { defaultValue: "All rules satisfied" })
+        }
+      : approvedPlan
+      ? {
+          color: "success" as const,
+          label: t("planning.approvedReady", { defaultValue: "Approved plan stored" })
+        }
+      : {
+          color: "default" as const,
+          label: t("planning.noApprovedPlan", { defaultValue: "Awaiting approval" })
+        };
+
+  const phaseHint =
+    activePhase === "preparation"
+      ? t("planning.preparationHint", {
+          defaultValue: "Resolve rule violations before approving the plan."
+        })
+      : approvedPlan
+      ? t("planning.approvedHint", {
+          defaultValue: "Review the approved plan and tracked hours."
+        })
+      : t("planning.approvedEmpty", {
+          defaultValue: "No approved plan stored yet."
+        });
+
+  const primaryActionLabel =
+    activePhase === "preparation"
+      ? t("planning.generateButton", { defaultValue: "Regenerate draft" })
+      : t("planning.refreshButton", { defaultValue: "Refresh data" });
+
+  const handlePrimaryAction = () => {
+    if (activePhase === "preparation") {
+      void refreshPreparationPlan();
+    } else {
+      void loadInitialData();
+    }
+  };
 
   return (
     <Box display="flex" flexDirection="column" height="100%">
@@ -104,16 +167,9 @@ const App = () => {
                   : t("planning.resourcePlural", { defaultValue: `${t("planning.resource")}s` })
               }`}
             />
-            <Chip
-              color={violations.length ? "warning" : "success"}
-              label={
-                violations.length
-                  ? `${violations.length} ${t("violations.title")}`
-                  : t("violations.none")
-              }
-            />
-            <Button variant="contained" onClick={() => void loadInitialData()}>
-              {t("planning.refreshButton", { defaultValue: "Refresh data" })}
+            <Chip color={statusChip.color} label={statusChip.label} />
+            <Button variant="contained" disabled={isLoading} onClick={handlePrimaryAction}>
+              {primaryActionLabel}
             </Button>
           </Stack>
         </Box>
@@ -129,14 +185,55 @@ const App = () => {
 
         <Fade in={tab === "planning"} mountOnEnter unmountOnExit timeout={350}>
           <Box>
+            <Box sx={{ mb: 3 }}>
+              <Tabs
+                value={activePhase}
+                onChange={handlePhaseChange}
+                sx={{ borderBottom: (theme) => `1px solid ${theme.palette.divider}`, mb: 1.5 }}
+              >
+                <Tab label={t("planning.preparationTab")} value="preparation" />
+                <Tab
+                  label={t("planning.approvedTab")}
+                  value="approved"
+                  disabled={!approvedPlan || approvedPlan.entries.length === 0}
+                />
+              </Tabs>
+              <Typography variant="body2" color="text.secondary">
+                {phaseHint}
+              </Typography>
+            </Box>
             <Grid container spacing={3}>
               <Grid item xs={12} md={8}>
                 <PlanningGrid />
               </Grid>
               <Grid item xs={12} md={4}>
                 <Stack spacing={3}>
-                  <SummaryPanel />
-                  <ViolationsPanel />
+                  {activePhase === "preparation" ? (
+                    <>
+                      <PlanningInsightsPanel />
+                      <ViolationsPanel />
+                    </>
+                  ) : null}
+                  {activePhase === "approved" && approvedPlan ? <SummaryPanel /> : null}
+                  {activePhase === "approved" && !approvedPlan ? (
+                    <Box
+                      sx={{
+                        borderRadius: 3,
+                        border: "1px dashed rgba(51, 88, 255, 0.3)",
+                        p: 3,
+                        bgcolor: "rgba(51, 88, 255, 0.04)"
+                      }}
+                    >
+                      <Typography variant="subtitle1" sx={{ fontWeight: 600 }} gutterBottom>
+                        {t("planning.noApprovedPlan", { defaultValue: "Awaiting approval" })}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {t("planning.approvedEmpty", {
+                          defaultValue: "Run and approve a plan to see the final overview here."
+                        })}
+                      </Typography>
+                    </Box>
+                  ) : null}
                 </Stack>
               </Grid>
             </Grid>

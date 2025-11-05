@@ -1,19 +1,28 @@
 import { Card, CardContent, Chip, List, ListItem, Stack, Typography } from "@mui/material";
+import { useMemo } from "react";
 import ReportProblemIcon from "@mui/icons-material/ReportProblem";
 import { useTranslation } from "react-i18next";
 
 import useScheduleStore from "../state/scheduleStore";
+import formatViolationMessage from "../utils/formatViolation";
 
 const ViolationsPanel = () => {
-  const { t } = useTranslation();
-  const { violations } = useScheduleStore();
+  const { t, i18n } = useTranslation();
+  const { plans, activePhase, resources } = useScheduleStore();
+  const violations = plans[activePhase]?.violations ?? [];
 
-  const severityColor: Record<typeof violations[number]["severity"], "error" | "warning" | "info"> =
-    {
-      critical: "error",
-      warning: "warning",
-      info: "info"
-    };
+  const resourceNames = useMemo(() => {
+    return resources.reduce<Record<number, string>>((acc, resource) => {
+      acc[resource.id] = resource.name;
+      return acc;
+    }, {});
+  }, [resources]);
+
+  const severityColor: Record<"critical" | "warning" | "info", "error" | "warning" | "info"> = {
+    critical: "error",
+    warning: "warning",
+    info: "info"
+  };
 
   return (
     <Card>
@@ -49,7 +58,10 @@ const ViolationsPanel = () => {
                     />
                   </Stack>
                   <Typography variant="body2" color="text.secondary">
-                    {violation.message}
+                    {formatViolationMessage(t, violation, {
+                      resourceNames,
+                      language: i18n.language
+                    })}
                   </Typography>
                 </Stack>
               </ListItem>
