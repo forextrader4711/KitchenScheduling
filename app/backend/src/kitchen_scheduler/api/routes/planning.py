@@ -1,9 +1,12 @@
+from collections import defaultdict
 from datetime import date
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from kitchen_scheduler.db.models.resource import Resource
 from kitchen_scheduler.db.session import get_db_session
 from kitchen_scheduler.repositories import planning as planning_repo
 from kitchen_scheduler.repositories import resource as resource_repo
@@ -12,17 +15,21 @@ from kitchen_scheduler.repositories import system as system_repo
 from kitchen_scheduler.schemas.planning import (
     PlanGenerationRequest,
     PlanGenerationResponse,
-    PlanScenarioCreate,
-    PlanScenarioRead,
-    PlanScenarioUpdate,
-    PlanVersionRead,
-    PlanViolation,
+    PlanInsightItem,
+    PlanInsights,
     PlanOverviewResponse,
     PlanPhaseRead,
+    PlanScenarioCreate,
+    PlanScenarioRead,
     PlanScenarioSummary,
-    PlanInsights,
-    PlanInsightItem,
+    PlanScenarioUpdate,
+    PlanSuggestedChange,
+    PlanSuggestion,
+    PlanVersionRead,
+    PlanViolation,
+    RuleStatus,
 )
+from kitchen_scheduler.schemas.resource import PlanningEntryRead
 from kitchen_scheduler.services.rules import RuleSet, SchedulingRules, load_default_rules
 from kitchen_scheduler.services.scheduler import (
     AbsenceWindow,
@@ -30,11 +37,51 @@ from kitchen_scheduler.services.scheduler import (
     SchedulingContext,
     SchedulingResource,
     SchedulingShift,
-    generate_stub_schedule,
+    evaluate_rule_violations,
+    generate_rule_compliant_schedule,
 )
-from kitchen_scheduler.schemas.resource import PlanningEntryRead
 
 router = APIRouter()
+
+_SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
+
+_RULE_STATUS_DEFINITIONS = [
+    {
+        "code": "max-hours-per-week",
+        "translation_key": "planning.ruleStatus.maxHoursPerWeek",
+        "violation_codes": {"hours-per-week-exceeded"},
+    },
+    {
+        "code": "max-days-per-week",
+        "translation_key": "planning.ruleStatus.maxWorkingDaysPerWeek",
+        "violation_codes": {"days-per-week-exceeded"},
+    },
+    {
+        "code": "max-consecutive-days",
+        "translation_key": "planning.ruleStatus.maxConsecutiveDays",
+        "violation_codes": {"consecutive-days-exceeded"},
+    },
+    {
+        "code": "consecutive-rest-days",
+        "translation_key": "planning.ruleStatus.consecutiveRestDays",
+        "violation_codes": {"insufficient-consecutive-rest"},
+    },
+    {
+        "code": "minimum-daily-staff",
+        "translation_key": "planning.ruleStatus.minimumDailyStaff",
+        "violation_codes": {"staffing-shortfall"},
+    },
+    {
+        "code": "role-minimums",
+        "translation_key": "planning.ruleStatus.roleMinimums",
+        "violation_codes": {"role-min-shortfall"},
+    },
+    {
+        "code": "role-maximums",
+        "translation_key": "planning.ruleStatus.roleMaximums",
+        "violation_codes": {"role-max-exceeded"},
+    },
+]
 
 
 @router.get("/scenarios", response_model=list[PlanScenarioRead])
@@ -110,6 +157,8 @@ def _map_violation(v):
 async def _run_generation(
     session: AsyncSession,
     month: str,
+    *,
+    label: str | None = None,
 ) -> PlanGenerationResponse:
     resources = await resource_repo.list_resources(session)
     shifts = await shift_repo.list_shifts(session)
@@ -157,7 +206,7 @@ async def _run_generation(
         shifts=scheduling_shifts,
         rules=rule_set,
     )
-    result = generate_stub_schedule(context)
+    result = generate_rule_compliant_schedule(context)
     violations = [_map_violation(v) for v in result.violations]
     response = PlanGenerationResponse(entries=result.entries, violations=violations)
 
@@ -168,7 +217,12 @@ async def _run_generation(
         name="Draft Scenario",
     )
     scenario.status = "draft"
-    await planning_repo.store_plan_generation(session, scenario, response)
+    await planning_repo.store_plan_generation(
+        session,
+        scenario,
+        response,
+        version_label=label,
+    )
     await session.commit()
 
     return response
@@ -179,7 +233,7 @@ async def generate_plan(
     payload: PlanGenerationRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> PlanGenerationResponse:
-    return await _run_generation(session, payload.month)
+    return await _run_generation(session, payload.month, label=payload.label)
 
 
 @router.post("/scenarios/{scenario_id}/generate", response_model=PlanGenerationResponse)
@@ -201,6 +255,9 @@ async def get_plan_overview(
     await planning_repo.ensure_scenario(session, month=month, status="draft", name="Draft Scenario")
     await session.commit()
 
+    resources = await resource_repo.list_resources(session)
+    resource_lookup = {resource.id: resource for resource in resources}
+
     scenarios = await planning_repo.preload_scenarios_for_month(session, month)
 
     def _merge_item(
@@ -220,28 +277,46 @@ async def get_plan_overview(
             bucket[key] = PlanInsightItem(severity=violation.severity, violations=[violation])
 
     def _aggregate_insights(violations: list[PlanViolation]) -> PlanInsights:
-        severity_rank = {"info": 0, "warning": 1, "critical": 2}
         daily: dict[str, PlanInsightItem] = {}
         resource: dict[int, PlanInsightItem] = {}
         weekly: dict[str, PlanInsightItem] = {}
 
         for violation in violations:
             if violation.day:
-                _merge_item(daily, violation.day, violation, severity_rank)
+                _merge_item(daily, violation.day, violation, _SEVERITY_RANK)
             if violation.resource_id is not None:
-                _merge_item(resource, violation.resource_id, violation, severity_rank)
+                _merge_item(resource, violation.resource_id, violation, _SEVERITY_RANK)
             if violation.iso_week:
-                _merge_item(weekly, violation.iso_week, violation, severity_rank)
+                _merge_item(weekly, violation.iso_week, violation, _SEVERITY_RANK)
 
         if violations:
-            severity = max(violations, key=lambda v: severity_rank[v.severity]).severity
+            severity = max(violations, key=lambda v: _SEVERITY_RANK[v.severity]).severity
             monthly = {"month": PlanInsightItem(severity=severity, violations=list(violations))}
         else:
             monthly = {}
 
         return PlanInsights(daily=daily, resource=resource, weekly=weekly, monthly=monthly)
 
-    def _to_phase(scenario) -> PlanPhaseRead:
+    def _build_rule_statuses(violations: list[PlanViolation]) -> list[RuleStatus]:
+        statuses: list[RuleStatus] = []
+        for config in _RULE_STATUS_DEFINITIONS:
+            matched = [violation for violation in violations if violation.code in config["violation_codes"]]
+            if matched:
+                highest = max(matched, key=lambda v: _SEVERITY_RANK[v.severity]).severity
+                status_value = "critical" if highest == "critical" else "warning"
+            else:
+                status_value = "ok"
+            statuses.append(
+                RuleStatus(
+                    code=config["code"],
+                    translation_key=config["translation_key"],
+                    status=status_value,
+                    violations=matched,
+                )
+            )
+        return statuses
+
+    def _to_phase(scenario, resource_map: dict[int, Resource]) -> PlanPhaseRead:
         summary = PlanScenarioSummary.model_validate(scenario)
         ordered_entries = sorted(scenario.entries, key=lambda entry: (entry.date, entry.resource_id))
         entries = [PlanningEntryRead.model_validate(entry) for entry in ordered_entries]
@@ -250,19 +325,489 @@ async def get_plan_overview(
             for violation in scenario.violations or []
         ]
         insights = _aggregate_insights(violations)
-        return PlanPhaseRead(scenario=summary, entries=entries, violations=violations, insights=insights)
+        rule_statuses = _build_rule_statuses(violations)
+        suggestions = _build_suggestions(violations, entries, resource_map)
+        return PlanPhaseRead(
+            scenario=summary,
+            entries=entries,
+            violations=violations,
+            insights=insights,
+            rule_statuses=rule_statuses,
+            suggestions=suggestions,
+        )
 
     preparation = None
     approved = None
     for scenario in scenarios:
         if scenario.status == "approved":
-            approved = _to_phase(scenario)
+            approved = _to_phase(scenario, resource_lookup)
         else:
             # Treat everything else as preparation phase for now (draft, ready, etc.)
             if preparation is None:
-                preparation = _to_phase(scenario)
+                preparation = _to_phase(scenario, resource_lookup)
 
     return PlanOverviewResponse(month=month, preparation=preparation, approved=approved)
+
+
+def _build_suggestions(
+    violations: list[PlanViolation],
+    entries: list[PlanningEntryRead],
+    resources: dict[int, Resource],
+) -> list[PlanSuggestion]:
+    if not violations:
+        return []
+
+    assignments_by_day: dict[str, set[int]] = defaultdict(set)
+    absence_entries: set[tuple[str, int]] = set()
+
+    for entry in entries:
+        entry_date = entry.date.isoformat() if isinstance(entry.date, date) else str(entry.date)
+        if entry.shift_code is not None:
+            assignments_by_day[entry_date].add(entry.resource_id)
+        if entry.absence_type:
+            absence_entries.add((entry_date, entry.resource_id))
+
+    resources_by_role: dict[str, list[Resource]] = defaultdict(list)
+    for resource in resources.values():
+        role_value = resource.role.value if hasattr(resource.role, "value") else str(resource.role)
+        resources_by_role[role_value].append(resource)
+
+    suggestions: list[PlanSuggestion] = []
+
+    def _entries_for_resource(resource_id: int) -> list[PlanningEntryRead]:
+        return sorted(
+            [
+                entry
+                for entry in entries
+                if entry.resource_id == resource_id and entry.shift_code is not None
+            ],
+            key=lambda record: record.date,
+        )
+
+    def _parse_week(week_value: str | None) -> tuple[int, int] | None:
+        if not week_value:
+            return None
+        try:
+            year_str, week_str = week_value.split("-W")
+            return int(year_str), int(week_str)
+        except ValueError:
+            return None
+
+    def _candidate_for_role(role_key: str, iso_date: str) -> Resource | None:
+        target_role = _resolve_role(role_key)
+        candidate_pool = resources_by_role.get(target_role, [])
+        if not candidate_pool:
+            return None
+        target_day = date.fromisoformat(iso_date)
+        for resource in sorted(candidate_pool, key=lambda r: r.id):
+            if resource.id in assignments_by_day.get(iso_date, set()):
+                continue
+            if (iso_date, resource.id) in absence_entries:
+                continue
+            if _resource_has_absence(resource, target_day):
+                continue
+            if not _resource_is_available(resource, target_day):
+                continue
+            return resource
+        return None
+
+    for index, violation in enumerate(violations):
+        meta = violation.meta or {}
+        suggestion_id = f"{violation.code}-{index}"
+
+        if violation.code == "role-min-shortfall":
+            iso_date = meta.get("date")
+            if not iso_date:
+                continue
+            role_key = meta.get("role")
+            if not role_key:
+                continue
+            candidate = _candidate_for_role(role_key, iso_date)
+            if candidate:
+                preferred_shift = (candidate.preferred_shift_codes or [None])[0]
+                shift_code = preferred_shift if preferred_shift is not None else 1
+                role_value = candidate.role.value if hasattr(candidate.role, "value") else str(candidate.role)
+                suggestions.append(
+                    PlanSuggestion(
+                        id=suggestion_id,
+                        type="assign-role-shortfall",
+                        title=f"Assign {candidate.name}",
+                        description=(
+                            f"Assign {candidate.name} ({role_value}) to cover the {role_key} shortfall on {iso_date}."
+                        ),
+                        severity=violation.severity,
+                        related_violation=violation.code,
+                        change=PlanSuggestedChange(
+                            action="assign_shift",
+                            resource_id=candidate.id,
+                            date=iso_date,
+                            shift_code=shift_code,
+                        ),
+                        metadata={
+                            "role": role_key,
+                            "date": iso_date,
+                            "resource_name": candidate.name,
+                            "suggested_shift": shift_code,
+                        },
+                    )
+                )
+            else:
+                suggestions.append(
+                    PlanSuggestion(
+                        id=suggestion_id,
+                        type="role-min-shortfall",
+                        title=f"Resolve {role_key} shortfall",
+                        description=(
+                            f"No available {role_key} found for {iso_date}. Adjust other assignments or review availability."
+                        ),
+                        severity=violation.severity,
+                        related_violation=violation.code,
+                        metadata={"role": role_key, "date": iso_date},
+                    )
+                )
+        elif violation.code == "staffing-shortfall":
+            iso_date = meta.get("date")
+            if not iso_date:
+                continue
+            candidate = None
+            target_day = date.fromisoformat(iso_date)
+            for resource in sorted(resources.values(), key=lambda r: r.id):
+                role_value = resource.role.value if hasattr(resource.role, "value") else str(resource.role)
+                if role_value == "apprentice":
+                    continue
+                if resource.id in assignments_by_day.get(iso_date, set()):
+                    continue
+                if (iso_date, resource.id) in absence_entries:
+                    continue
+                if _resource_has_absence(resource, target_day):
+                    continue
+                if not _resource_is_available(resource, target_day):
+                    continue
+                candidate = resource
+                break
+            if candidate:
+                preferred_shift = (candidate.preferred_shift_codes or [None])[0]
+                shift_code = preferred_shift if preferred_shift is not None else 1
+                suggestions.append(
+                    PlanSuggestion(
+                        id=suggestion_id,
+                        type="assign-staffing-shortfall",
+                        title=f"Add {candidate.name}",
+                        description=f"Assign {candidate.name} to cover the staffing shortfall on {iso_date}.",
+                        severity=violation.severity,
+                        related_violation=violation.code,
+                        change=PlanSuggestedChange(
+                            action="assign_shift",
+                            resource_id=candidate.id,
+                            date=iso_date,
+                            shift_code=shift_code,
+                        ),
+                        metadata={
+                            "date": iso_date,
+                            "resource_name": candidate.name,
+                            "suggested_shift": shift_code,
+                        },
+                    )
+                )
+            else:
+                suggestions.append(
+                    PlanSuggestion(
+                        id=suggestion_id,
+                        type="staffing-shortfall",
+                        title="Review staffing gap",
+                        description=(
+                            f"No available resource found to cover staffing shortfall on {iso_date}. "
+                            "Consider adjusting assignments or availability."
+                        ),
+                        severity=violation.severity,
+                        related_violation=violation.code,
+                        metadata={"date": iso_date},
+                    )
+                )
+        elif violation.code in {"hours-per-week-exceeded", "days-per-week-exceeded"}:
+            resource_id = meta.get("resource_id") or violation.resource_id
+            week_key = meta.get("week") or violation.iso_week
+            week_parsed = _parse_week(week_key)
+            if not resource_id or not week_parsed:
+                continue
+            year, week_number = week_parsed
+            affected_entries = [
+                entry
+                for entry in entries
+                if entry.resource_id == resource_id
+                and entry.shift_code is not None
+                and entry.date.isocalendar()[:2] == (year, week_number)
+            ]
+            if not affected_entries:
+                continue
+            entry_to_adjust = max(affected_entries, key=lambda record: record.date)
+            resource_obj = resources.get(resource_id)
+            if not resource_obj:
+                continue
+            suggestions.append(
+                PlanSuggestion(
+                    id=suggestion_id,
+                    type=violation.code,
+                    title=f"Reduce load for {resource_obj.name}",
+                    description=(
+                        f"Remove the assignment on {entry_to_adjust.date.isoformat()} to help {resource_obj.name}"
+                        f" meet weekly limits."
+                    ),
+                    severity=violation.severity,
+                    related_violation=violation.code,
+                    change=PlanSuggestedChange(
+                        action="remove_assignment",
+                        resource_id=resource_obj.id,
+                        date=entry_to_adjust.date.isoformat(),
+                    ),
+                    metadata={
+                        "date": entry_to_adjust.date.isoformat(),
+                        "resource_name": resource_obj.name,
+                        "week": week_key,
+                    },
+                )
+            )
+        elif violation.code == "consecutive-days-exceeded":
+            resource_id = meta.get("resource_id") or violation.resource_id
+            if not resource_id:
+                continue
+            resource_entries = _entries_for_resource(resource_id)
+            if not resource_entries:
+                continue
+            entry_to_adjust = resource_entries[-1]
+            resource_obj = resources.get(resource_id)
+            if not resource_obj:
+                continue
+            suggestions.append(
+                PlanSuggestion(
+                    id=suggestion_id,
+                    type="consecutive-days-exceeded",
+                    title=f"Insert rest day for {resource_obj.name}",
+                    description=(
+                        f"Add a rest day on {entry_to_adjust.date.isoformat()} to break the consecutive streak."
+                    ),
+                    severity=violation.severity,
+                    related_violation=violation.code,
+                    change=PlanSuggestedChange(
+                        action="set_rest_day",
+                        resource_id=resource_obj.id,
+                        date=entry_to_adjust.date.isoformat(),
+                        absence_type="rest_day",
+                    ),
+                    metadata={
+                        "date": entry_to_adjust.date.isoformat(),
+                        "resource_name": resource_obj.name,
+                    },
+                )
+            )
+        elif violation.code == "insufficient-consecutive-rest":
+            resource_id = meta.get("resource_id") or violation.resource_id
+            if not resource_id:
+                continue
+            resource_entries = _entries_for_resource(resource_id)
+            if not resource_entries:
+                continue
+            entry_to_adjust = resource_entries[-1]
+            resource_obj = resources.get(resource_id)
+            if not resource_obj:
+                continue
+            suggestions.append(
+                PlanSuggestion(
+                    id=suggestion_id,
+                    type="insufficient-consecutive-rest",
+                    title=f"Give {resource_obj.name} additional rest",
+                    description=(
+                        f"Schedule {resource_obj.name} off on {entry_to_adjust.date.isoformat()} to add a rest pair."
+                    ),
+                    severity=violation.severity,
+                    related_violation=violation.code,
+                    change=PlanSuggestedChange(
+                        action="set_rest_day",
+                        resource_id=resource_obj.id,
+                        date=entry_to_adjust.date.isoformat(),
+                        absence_type="rest_day",
+                    ),
+                    metadata={
+                        "date": entry_to_adjust.date.isoformat(),
+                        "resource_name": resource_obj.name,
+                    },
+                )
+            )
+
+    return suggestions
+
+
+_ROLE_RESOLVE_MAP = {
+    "pot_washers": "pot_washer",
+    "kitchen_assistants": "kitchen_assistant",
+    "apprentices": "apprentice",
+    "cooks": "cook",
+    "relief_cooks": "relief_cook",
+}
+
+
+def _resolve_role(role_key: str) -> str:
+    return _ROLE_RESOLVE_MAP.get(role_key, role_key.rstrip("s"))
+
+
+def _resource_is_available(resource: Resource, target_date: date) -> bool:
+    template = resource.availability_template or []
+    weekday = target_date.strftime("%A").lower()
+    for window in template:
+        if window.get("day") == weekday:
+            return bool(window.get("is_available", True))
+    return True
+
+
+def _resource_has_absence(resource: Resource, target_date: date) -> str | None:
+    for absence in resource.absences or []:
+        if absence.start_date <= target_date <= absence.end_date:
+            return absence.absence_type
+    return None
+
+
+class ApplySuggestionPayload(BaseModel):
+    change: PlanSuggestedChange
+    label: str | None = None
+
+
+@router.post("/scenarios/{scenario_id}/apply-suggestion", response_model=PlanGenerationResponse)
+async def apply_suggestion_to_scenario(
+    scenario_id: int,
+    payload: ApplySuggestionPayload,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> PlanGenerationResponse:
+    scenario = await planning_repo.get_scenario(session, scenario_id)
+    if not scenario:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scenario not found")
+
+    await session.refresh(scenario, attribute_names=["entries"])
+
+    change = payload.change
+    try:
+        target_date = date.fromisoformat(change.date)
+    except ValueError as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid date format") from exc
+
+    resources = await resource_repo.list_resources(session)
+    resource_lookup = {resource.id: resource for resource in resources}
+    if change.resource_id not in resource_lookup:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown resource")
+
+    entries_data: list[dict[str, Any]] = []
+    for entry in scenario.entries:
+        entries_data.append(
+            {
+                "resource_id": entry.resource_id,
+                "date": entry.date if isinstance(entry.date, date) else date.fromisoformat(str(entry.date)),
+                "shift_code": entry.shift_code,
+                "absence_type": entry.absence_type,
+                "comment": entry.comment,
+            }
+        )
+
+    existing_index = next(
+        (idx for idx, item in enumerate(entries_data) if item["resource_id"] == change.resource_id and item["date"] == target_date),
+        None,
+    )
+
+    if change.action == "assign_shift":
+        if change.shift_code is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="shift_code is required for assign_shift")
+        entry_payload = {
+            "resource_id": change.resource_id,
+            "date": target_date,
+            "shift_code": change.shift_code,
+            "absence_type": None,
+            "comment": "APPLIED-SUGGESTION",
+        }
+        if existing_index is not None:
+            entries_data[existing_index] = entry_payload
+        else:
+            entries_data.append(entry_payload)
+    elif change.action == "set_rest_day":
+        entry_payload = {
+            "resource_id": change.resource_id,
+            "date": target_date,
+            "shift_code": None,
+            "absence_type": change.absence_type or "rest_day",
+            "comment": "APPLIED-SUGGESTION",
+        }
+        if existing_index is not None:
+            entries_data[existing_index] = entry_payload
+        else:
+            entries_data.append(entry_payload)
+    elif change.action == "remove_assignment":
+        if existing_index is not None:
+            entries_data.pop(existing_index)
+    else:  # pragma: no cover - defensive
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported action")
+
+    sorted_entries = sorted(entries_data, key=lambda item: (item["date"], item["resource_id"]))
+    planning_entries: list[PlanningEntryRead] = []
+    for idx, item in enumerate(sorted_entries, start=1):
+        planning_entries.append(
+            PlanningEntryRead(
+                id=idx,
+                resource_id=item["resource_id"],
+                date=item["date"],
+                shift_code=item["shift_code"],
+                absence_type=item["absence_type"],
+                comment=item["comment"],
+            )
+        )
+
+    shifts = await shift_repo.list_shifts(session)
+    rule_config = await system_repo.get_active_rule_config(session)
+    if rule_config:
+        rule_set = RuleSet(rules=SchedulingRules.model_validate(rule_config.rules))
+    else:
+        rule_set = load_default_rules()
+
+    scheduling_resources = [
+        SchedulingResource(
+            id=res.id,
+            role=res.role.value if hasattr(res.role, "value") else str(res.role),
+            availability=_map_availability_template(res.availability_template),
+            preferred_shift_codes=list(res.preferred_shift_codes or []),
+            undesired_shift_codes=list(res.undesired_shift_codes or []),
+            absences=[
+                AbsenceWindow(
+                    start_date=absence.start_date,
+                    end_date=absence.end_date,
+                    absence_type=absence.absence_type,
+                    comment=absence.comment,
+                )
+                for absence in res.absences or []
+            ],
+        )
+        for res in resources
+    ]
+
+    scheduling_shifts = [
+        SchedulingShift(
+            code=shift.code,
+            description=shift.description,
+            start=shift.start,
+            end=shift.end,
+            hours=float(shift.hours),
+        )
+        for shift in shifts
+    ]
+
+    context = SchedulingContext(
+        month=scenario.month,
+        resources=scheduling_resources,
+        shifts=scheduling_shifts,
+        rules=rule_set,
+    )
+    violations_raw = evaluate_rule_violations(context, planning_entries)
+    violations = [_map_violation(v) for v in violations_raw]
+
+    response = PlanGenerationResponse(entries=planning_entries, violations=violations)
+    await planning_repo.store_plan_generation(session, scenario, response, version_label=payload.label)
+    await session.commit()
+    return response
 
 
 def _map_availability_template(template: Any) -> list[AvailabilityWindow]:

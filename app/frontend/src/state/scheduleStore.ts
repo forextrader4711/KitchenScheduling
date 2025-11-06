@@ -3,6 +3,7 @@ import { create } from "zustand";
 import api from "../services/api";
 import {
   PlanningEntry,
+  PlanSuggestedChange,
   Resource,
   ResourceAbsence,
   SummaryItem,
@@ -74,6 +75,8 @@ type PlanPhaseDto = {
   entries: PlanningEntryDto[];
   violations: PlanViolationDto[];
   insights?: PlanInsightsDto;
+  rule_statuses?: RuleStatusDto[];
+  suggestions?: PlanSuggestionDto[];
 };
 
 type PlanOverviewDto = {
@@ -94,6 +97,42 @@ type PlanInsightsDto = {
   monthly: Record<string, PlanInsightItemDto>;
 };
 
+type RuleStatusDto = {
+  code: string;
+  translation_key: string;
+  status: "ok" | "warning" | "critical";
+  violations: PlanViolationDto[];
+};
+
+type PlanSuggestedChangeDto = {
+  action: "assign_shift" | "set_rest_day" | "remove_assignment";
+  resource_id: number;
+  date: string;
+  shift_code?: number | null;
+  absence_type?: string | null;
+};
+
+type PlanSuggestionDto = {
+  id: string;
+  type: string;
+  title: string;
+  description: string;
+  severity: "info" | "warning" | "critical";
+  related_violation?: string | null;
+  change?: PlanSuggestedChangeDto | null;
+  metadata?: Record<string, unknown>;
+};
+
+type PlanVersionDto = {
+  id: number;
+  scenario_id: number;
+  version_label: string;
+  published_at: string | null;
+  published_by: string | null;
+  summary_hours: string | null;
+  created_at: string;
+};
+
 type PlanPhaseState = {
   scenario: {
     id: number;
@@ -105,6 +144,9 @@ type PlanPhaseState = {
   violations: ViolationItem[];
   summaries: SummaryItem[];
   insights: PlanInsightsState;
+  ruleStatuses: RuleStatusState[];
+  versions: PlanVersionState[];
+  suggestions: PlanSuggestionState[];
 };
 
 type PlanPhaseKey = "preparation" | "approved";
@@ -121,6 +163,36 @@ type PlanInsightStateItem = {
   violations: ViolationItem[];
 };
 
+type RuleStatusState = {
+  code: string;
+  translationKey: string;
+  status: "ok" | "warning" | "critical";
+  violations: ViolationItem[];
+  count: number;
+};
+
+type PlanVersionState = {
+  id: number;
+  label: string;
+  createdAt: string;
+  summary: {
+    entries?: number;
+    violations?: number;
+    critical_violations?: number;
+  } | null;
+};
+
+type PlanSuggestionState = {
+  id: string;
+  type: string;
+  title: string;
+  description: string;
+  severity: "info" | "warning" | "critical";
+  relatedViolation?: string | null;
+  change?: PlanSuggestedChange | null;
+  metadata?: Record<string, unknown>;
+};
+
 interface ScheduleState {
   month: string | null;
   isLoading: boolean;
@@ -129,7 +201,8 @@ interface ScheduleState {
   activePhase: PlanPhaseKey;
   setActivePhase: (phase: PlanPhaseKey) => void;
   loadInitialData: () => Promise<void>;
-  refreshPreparationPlan: () => Promise<void>;
+  refreshPreparationPlan: (label?: string) => Promise<void>;
+  refreshOverviewOnly: () => Promise<void>;
 }
 
 const fallbackResources: Resource[] = [
@@ -290,6 +363,108 @@ function mapInsights(insights: PlanInsightsDto | undefined): PlanInsightsState {
   };
 }
 
+function mapRuleStatuses(
+  statuses: RuleStatusDto[] | undefined,
+  prefix: string
+): RuleStatusState[] {
+  if (!statuses) {
+    return [];
+  }
+
+  return statuses.map((status) => {
+    const violations = status.violations?.map((violation, index) =>
+      hydrateViolation(violation, index, `${prefix}-${status.code}`)
+    );
+    return {
+      code: status.code,
+      translationKey: status.translation_key,
+      status: status.status,
+      violations: violations ?? [],
+      count: violations?.length ?? 0
+    };
+  });
+}
+
+function mapSuggestions(
+  suggestions: PlanSuggestionDto[] | undefined,
+  prefix: string
+): PlanSuggestionState[] {
+  if (!suggestions) {
+    return [];
+  }
+
+  return suggestions.map((suggestion, index) => ({
+    id: suggestion.id ?? `${prefix}-suggestion-${index}`,
+    type: suggestion.type,
+    title: suggestion.title,
+    description: suggestion.description,
+    severity: suggestion.severity,
+    relatedViolation: suggestion.related_violation ?? undefined,
+    change: suggestion.change
+      ? {
+          action: suggestion.change.action,
+          resourceId: suggestion.change.resource_id,
+          date: suggestion.change.date,
+          shiftCode: suggestion.change.shift_code ?? undefined,
+          absenceType: suggestion.change.absence_type ?? undefined
+        }
+      : undefined,
+    metadata: suggestion.metadata ?? {}
+  }));
+}
+
+function mapVersions(versions: PlanVersionDto[] | undefined): PlanVersionState[] {
+  if (!versions) {
+    return [];
+  }
+  return versions.map((version) => {
+    let summary: PlanVersionState["summary"] = null;
+    if (version.summary_hours) {
+      try {
+        summary = JSON.parse(version.summary_hours) as PlanVersionState["summary"];
+      } catch {
+        summary = null;
+      }
+    }
+    return {
+      id: version.id,
+      label: version.version_label,
+      createdAt: version.created_at,
+      summary
+    };
+  });
+}
+
+const fetchPlanVersions = async (scenarioId: number): Promise<PlanVersionState[]> => {
+  const response = await api.get<PlanVersionDto[]>(`/planning/versions/${scenarioId}`);
+  return mapVersions(response.data);
+};
+
+const buildPlansFromOverview = async (
+  overview: PlanOverviewDto,
+  resources: Resource[]
+): Promise<{ preparation: PlanPhaseState | null; approved: PlanPhaseState | null }> => {
+  const preparationPrefix = overview.preparation?.scenario?.id
+    ? `scenario-${overview.preparation.scenario.id}-prep`
+    : "preparation";
+  let preparationPlan = buildPlanPhaseState(overview.preparation, resources, preparationPrefix);
+  if (preparationPlan?.scenario) {
+    const versions = await fetchPlanVersions(preparationPlan.scenario.id);
+    preparationPlan = { ...preparationPlan, versions };
+  }
+
+  const approvedPrefix = overview.approved?.scenario?.id
+    ? `scenario-${overview.approved.scenario.id}-approved`
+    : "approved";
+  let approvedPlan = buildPlanPhaseState(overview.approved, resources, approvedPrefix);
+  if (approvedPlan?.scenario) {
+    const versions = await fetchPlanVersions(approvedPlan.scenario.id);
+    approvedPlan = { ...approvedPlan, versions };
+  }
+
+  return { preparation: preparationPlan, approved: approvedPlan };
+};
+
 const buildPlanPhaseState = (
   phase: PlanPhaseDto | null | undefined,
   resources: Resource[],
@@ -312,7 +487,10 @@ const buildPlanPhaseState = (
     entries,
     violations: mapViolations(phase.violations ?? [], `${prefix}-violations`),
     summaries: computeSummaries(entries, resources),
-    insights
+    insights,
+    ruleStatuses: mapRuleStatuses(phase.rule_statuses, prefix),
+    versions: [],
+    suggestions: mapSuggestions(phase.suggestions, `${prefix}-suggestion`)
   };
 };
 
@@ -380,11 +558,20 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
         );
       }
 
-      const approvedPlan = buildPlanPhaseState(
+      if (preparationPlan?.scenario) {
+        const versions = await fetchPlanVersions(preparationPlan.scenario.id);
+        preparationPlan = { ...preparationPlan, versions };
+      }
+
+      let approvedPlan = buildPlanPhaseState(
         overview.approved,
         resources,
         overview.approved?.scenario?.id ? `scenario-${overview.approved.scenario.id}-approved` : "approved"
       );
+      if (approvedPlan?.scenario) {
+        const versions = await fetchPlanVersions(approvedPlan.scenario.id);
+        approvedPlan = { ...approvedPlan, versions };
+      }
 
       set({
         month: fallbackMonth,
@@ -407,7 +594,10 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
             entries: fallbackEntries,
             violations: [],
             summaries: computeSummaries(fallbackEntries, fallbackResources),
-            insights: { daily: {}, resource: {}, weekly: {}, monthly: {} }
+            insights: { daily: {}, resource: {}, weekly: {}, monthly: {} },
+            ruleStatuses: [],
+            versions: [],
+            suggestions: []
           },
           approved: null
         },
@@ -416,30 +606,39 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
       });
     }
   },
-  refreshPreparationPlan: async () => {
+  refreshPreparationPlan: async (label?: string) => {
     const month = get().month ?? new Date().toISOString().slice(0, 7);
     set({ isLoading: true });
 
     try {
-      await api.post("/planning/generate", { month });
+      await api.post("/planning/generate", { month, label });
       const overviewResponse = await api.get<PlanOverviewDto>("/planning/overview", {
         params: { month }
       });
       const resources = get().resources.length ? get().resources : fallbackResources;
-      const preparationPlan = buildPlanPhaseState(
+      let preparationPlan = buildPlanPhaseState(
         overviewResponse.data.preparation,
         resources,
         overviewResponse.data.preparation?.scenario?.id
           ? `scenario-${overviewResponse.data.preparation.scenario.id}-prep`
           : "preparation"
       );
-      const approvedPlan = buildPlanPhaseState(
+      if (preparationPlan?.scenario) {
+        const versions = await fetchPlanVersions(preparationPlan.scenario.id);
+        preparationPlan = { ...preparationPlan, versions };
+      }
+
+      let approvedPlan = buildPlanPhaseState(
         overviewResponse.data.approved,
         resources,
         overviewResponse.data.approved?.scenario?.id
           ? `scenario-${overviewResponse.data.approved.scenario.id}-approved`
           : "approved"
       );
+      if (approvedPlan?.scenario) {
+        const versions = await fetchPlanVersions(approvedPlan.scenario.id);
+        approvedPlan = { ...approvedPlan, versions };
+      }
 
       set((state) => ({
         plans: {
@@ -451,6 +650,52 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
       }));
     } catch (error) {
       console.warn("Failed to refresh preparation plan.", error);
+      set({ isLoading: false });
+    }
+  },
+  refreshOverviewOnly: async () => {
+    const month = get().month ?? new Date().toISOString().slice(0, 7);
+    set({ isLoading: true });
+
+    try {
+      const overviewResponse = await api.get<PlanOverviewDto>("/planning/overview", {
+        params: { month }
+      });
+      const resources = get().resources.length ? get().resources : fallbackResources;
+      let preparationPlan = buildPlanPhaseState(
+        overviewResponse.data.preparation,
+        resources,
+        overviewResponse.data.preparation?.scenario?.id
+          ? `scenario-${overviewResponse.data.preparation.scenario.id}-prep`
+          : "preparation"
+      );
+      if (preparationPlan?.scenario) {
+        const versions = await fetchPlanVersions(preparationPlan.scenario.id);
+        preparationPlan = { ...preparationPlan, versions };
+      }
+
+      let approvedPlan = buildPlanPhaseState(
+        overviewResponse.data.approved,
+        resources,
+        overviewResponse.data.approved?.scenario?.id
+          ? `scenario-${overviewResponse.data.approved.scenario.id}-approved`
+          : "approved"
+      );
+      if (approvedPlan?.scenario) {
+        const versions = await fetchPlanVersions(approvedPlan.scenario.id);
+        approvedPlan = { ...approvedPlan, versions };
+      }
+
+      set((state) => ({
+        plans: {
+          preparation: preparationPlan,
+          approved: approvedPlan
+        },
+        activePhase: preparationPlan ? state.activePhase : approvedPlan ? "approved" : "preparation",
+        isLoading: false
+      }));
+    } catch (error) {
+      console.warn("Failed to refresh plan overview.", error);
       set({ isLoading: false });
     }
   }

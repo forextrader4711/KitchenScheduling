@@ -8,6 +8,7 @@
   "planning": {
     "gridTitle": "Planning mensuel pour {{month}}",
     "resource": "Ressource",
+    "role": "Rôle",
     "resourcePlural": "Ressources",
     "tabLabel": "Planning",
     "heroSubtitle": "Analysez le planning généré, équilibrez les heures et gardez les données de référence à jour.",
@@ -24,6 +25,7 @@
     "preparationIssues_plural": "{{count}} violations",
     "preparationAllClear": "Toutes les règles sont respectées",
     "generateButton": "Régénérer le brouillon",
+    "generateAndSaveButton": "Générer un planning conforme",
     "approvedReady": "Planning approuvé disponible",
     "noApprovedPlan": "En attente d'approbation",
     "insightsTitle": "Synthèse des statuts",
@@ -61,6 +63,77 @@
     "dayOverviewPrefers": "Shifts favoris : {{list}}",
     "dayOverviewAvoids": "Shifts à éviter : {{list}}",
     "dayOverviewWarnings": "Avertissements",
+    "generateDialog": {
+      "title": "Générer un planning conforme",
+      "description": "Lancez le calcul conforme et enregistrez le résultat comme nouvelle version. Vous pouvez renommer la version ci-dessous.",
+      "label": "Nom de la version",
+      "cancel": "Annuler",
+      "confirm": "Générer et enregistrer"
+    },
+    "suggestions": {
+      "title": "Propositions de corrections",
+      "subtitle": "Appliquez ces ajustements pour supprimer les violations.",
+      "date": "Date : {{date}}",
+      "role": "Rôle : {{role}}",
+      "week": "Semaine {{week}}",
+      "apply": "Appliquer le changement",
+      "appliedLabel": "Suggestion appliquée : {{title}}",
+      "showAll": "Afficher toutes les propositions",
+      "showLess": "Afficher moins de propositions",
+      "types": {
+        "assign-role-shortfall": {
+          "title": "Affecter {{resource}}",
+          "description": "Affectez {{resource}} ({{role}}) pour couvrir le besoin de {{role}} le {{date}}."
+        },
+        "role-min-shortfall": {
+          "title": "Résoudre le manque de {{role}}",
+          "description": "Aucun {{role}} n'est disponible le {{date}}. Ajustez les affectations ou les disponibilités."
+        },
+        "assign-staffing-shortfall": {
+          "title": "Ajouter {{resource}}",
+          "description": "Affectez {{resource}} pour combler le manque d'effectif le {{date}}."
+        },
+        "staffing-shortfall": {
+          "title": "Réviser le manque d'effectif",
+          "description": "Aucune ressource disponible le {{date}}. Ajustez les affectations ou les disponibilités."
+        },
+        "hours-per-week-exceeded": {
+          "title": "Réduire la charge de {{resource}}",
+          "description": "Supprimez l'affectation du {{date}} afin que {{resource}} respecte les limites hebdomadaires."
+        },
+        "days-per-week-exceeded": {
+          "title": "Réduire la charge de {{resource}}",
+          "description": "Supprimez l'affectation du {{date}} afin que {{resource}} respecte le nombre de jours travaillés par semaine."
+        },
+        "consecutive-days-exceeded": {
+          "title": "Ajouter un jour de repos à {{resource}}",
+          "description": "Ajoutez un jour de repos le {{date}} pour interrompre la série de jours consécutifs."
+        },
+        "insufficient-consecutive-rest": {
+          "title": "Donner du repos supplémentaire à {{resource}}",
+          "description": "Planifiez {{resource}} en repos le {{date}} pour compléter la paire de repos."
+        }
+      }
+    },
+    "ruleStatus": {
+      "heading": "Contrôles des règles",
+      "maxHoursPerWeek": "Max 50 h par ressource et par semaine",
+      "maxWorkingDaysPerWeek": "Max 6 jours travaillés par semaine",
+      "maxConsecutiveDays": "Max 6 jours travaillés d'affilée",
+      "consecutiveRestDays": "Au moins 2 jours de repos consécutifs par mois",
+      "minimumDailyStaff": "Minimum 7 ressources par jour",
+      "roleMinimums": "Minima par rôle respectés chaque jour",
+      "roleMaximums": "Maxima par rôle non dépassés",
+      "status": {
+        "ok": "OK"
+      }
+    },
+    "versionHistory": {
+      "title": "Historique des plans",
+      "entries": "{{count}} affectations",
+      "violations": "{{count}} violations",
+      "critical": "{{count}} critiques"
+    },
     "violationMessages": {
       "staffing-shortfall": "Seulement {{assigned}} ressource(s) planifiées le {{date}} ; minimum {{required}}.",
       "role-min-shortfall": "Minimum {{role}} non atteint le {{date}} : {{assigned}} affectée(s), requis {{min}}.",
@@ -143,6 +216,13 @@
       "apprentice": "Apprenti",
       "relief_cook": "Cuisinier volant"
     },
+    "roleLabels": {
+      "cook": "Chef de partie",
+      "kitchen_assistant": "Assistant cuisine",
+      "pot_washer": "Plongeur",
+      "apprentice": "Apprenti",
+      "relief_cook": "Cuisinier volant"
+    },
     "shiftNames": {
       "standard_morning_shift": "Service du matin standard",
       "long_shift": "Shift longue journée",
@@ -163,7 +243,8 @@
       "vacation": "Vacances",
       "sick_leave": "Maladie",
       "training": "Formation",
-      "other": "Autre"
+      "other": "Autre",
+      "rest_day": "Jour de repos"
     }
   },
   "summary": {

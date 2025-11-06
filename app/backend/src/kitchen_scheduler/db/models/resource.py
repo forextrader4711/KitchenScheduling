@@ -5,9 +5,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Optional
 
 import sqlalchemy as sa
-
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy import Enum as SqlEnum
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from kitchen_scheduler.db.base import Base

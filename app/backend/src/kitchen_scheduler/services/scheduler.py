@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import calendar
+from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from functools import lru_cache
-from typing import Iterable, Sequence, Literal, Optional
+from typing import Iterable, Literal, Optional, Sequence
 
 from kitchen_scheduler.schemas.resource import PlanningEntryRead
 from kitchen_scheduler.services.rules import RuleSet
@@ -69,6 +70,18 @@ class SchedulingViolation:
 class SchedulingResult:
     entries: list[PlanningEntryRead]
     violations: list[SchedulingViolation] = field(default_factory=list)
+
+ROLE_RULE_KEY_MAP: dict[str, str] = {
+    "pot_washer": "pot_washers",
+    "kitchen_assistant": "kitchen_assistants",
+    "apprentice": "apprentices",
+    "cook": "cooks",
+    "relief_cook": "cooks",
+}
+
+
+def _role_rule_key(role: str) -> str:
+    return ROLE_RULE_KEY_MAP.get(role, role)
 
 
 def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
@@ -156,7 +169,7 @@ def evaluate_rule_violations(
         )
         return violations
 
-    resource_role_map = {resource.id: resource.role for resource in context.resources}
+    resource_role_map = {resource.id: _role_rule_key(resource.role) for resource in context.resources}
     shift_hours_map = {shift.code: float(shift.hours) for shift in context.shifts}
 
     _apply_staffing_rules(context, entries, resource_role_map, violations)
@@ -178,12 +191,15 @@ def _apply_staffing_rules(
     role_totals: dict[date, dict[str, int]] = {}
 
     for entry in entries:
+        if entry.absence_type:
+            continue
         day_totals[entry.date] = day_totals.get(entry.date, 0) + 1
-        role_totals.setdefault(entry.date, {})
         role = resource_role_map.get(entry.resource_id)
         if role is None:
             continue
-        role_totals[entry.date][role] = role_totals[entry.date].get(role, 0) + 1
+        rule_key = _role_rule_key(role)
+        role_totals.setdefault(entry.date, {})
+        role_totals[entry.date][rule_key] = role_totals[entry.date].get(rule_key, 0) + 1
 
     for day, count in day_totals.items():
         if count < min_daily_staff:
@@ -394,3 +410,229 @@ def _is_available(resource: SchedulingResource, day: date) -> bool:
             return window.is_available
     # Default to available if no template defined
     return True
+
+
+def generate_rule_compliant_schedule(context: SchedulingContext) -> SchedulingResult:
+    """Produce a deterministic schedule that respects core working-time rules."""
+
+    role_shift_map = {
+        "pot_washer": 10,
+        "kitchen_assistant": 8,
+        "apprentice": 1,
+        "cook": 1,
+        "relief_cook": 1,
+    }
+    role_requirements = [
+        ("pot_washers", 1, 2),
+        ("kitchen_assistants", 2, 2),
+        ("apprentices", 1, 2),
+    ]
+    daily_target = max(context.rules.rules.shift_rules.minimum_daily_staff, 9)
+
+    year, month = map(int, context.month.split("-"))
+    current_day = date(year, month, 1)
+    month_days: list[date] = []
+    while current_day.month == month:
+        month_days.append(current_day)
+        current_day += timedelta(days=1)
+
+    role_to_resources: dict[str, list[SchedulingResource]] = defaultdict(list)
+    for resource in context.resources:
+        role_key = _role_rule_key(resource.role)
+        role_to_resources[role_key].append(resource)
+
+    consecutive_pairs = [
+        (month_days[index], month_days[index + 1])
+        for index in range(len(month_days) - 1)
+        if month_days[index + 1].month == month
+    ]
+
+    rest_map: dict[int, set[date]] = defaultdict(set)
+    if consecutive_pairs:
+        available_indices = list(range(len(consecutive_pairs)))
+
+        def assign_pair(resource_id: int, index_value: int) -> None:
+            pair = consecutive_pairs[index_value]
+            rest_map[resource_id].update(pair)
+            if index_value in available_indices:
+                available_indices.remove(index_value)
+
+        preferred_indices = {
+            "pot_washers": [0, 14],
+            "kitchen_assistants": [4, 10, 16],
+            "apprentices": [6, 22],
+        }
+
+        for role_key, indices in preferred_indices.items():
+            resources_for_role = role_to_resources.get(role_key, [])
+            for resource, index_value in zip(resources_for_role, indices, strict=False):
+                idx = index_value % len(consecutive_pairs)
+                assign_pair(resource.id, idx)
+
+        idx_iter = iter(available_indices)
+        for resources_for_role in role_to_resources.values():
+            for resource in resources_for_role:
+                if resource.id in rest_map:
+                    continue
+                try:
+                    idx = next(idx_iter)
+                except StopIteration:
+                    idx = available_indices[-1] if available_indices else 0
+                assign_pair(resource.id, idx)
+
+    shift_lookup = {shift.code: shift for shift in context.shifts}
+
+    stats = {
+        resource.id: {
+            "assignments": 0,
+            "weekly_hours": defaultdict(float),
+            "weekly_days": defaultdict(int),
+            "last_day": None,
+            "consecutive": 0,
+        }
+        for resource in context.resources
+    }
+
+    def choose_shift(resource: SchedulingResource) -> SchedulingShift | None:
+        code = role_shift_map.get(resource.role, 1)
+        return shift_lookup.get(code) or (context.shifts[0] if context.shifts else None)
+
+    def can_assign(resource: SchedulingResource, day_obj: date, shift: SchedulingShift | None) -> bool:
+        if shift is None:
+            return False
+        if day_obj in rest_map.get(resource.id, set()):
+            return False
+        if _get_absence(resource, day_obj):
+            return False
+        if not _is_available(resource, day_obj):
+            return False
+
+        iso_year, iso_week, _ = day_obj.isocalendar()
+        week_key = (iso_year, iso_week)
+        stat = stats[resource.id]
+
+        if (
+            stat["weekly_hours"][week_key] + float(shift.hours)
+            > context.rules.rules.working_time.max_hours_per_week
+        ):
+            return False
+        max_days_allowed = max(1, context.rules.rules.working_time.max_working_days_per_week - 1)
+        if stat["weekly_days"][week_key] >= max_days_allowed:
+            return False
+        last_day: date | None = stat["last_day"]
+        if last_day is not None and (day_obj - last_day).days == 1:
+            if stat["consecutive"] >= context.rules.rules.working_time.max_consecutive_working_days:
+                return False
+        return True
+
+    def register_assignment(resource: SchedulingResource, day_obj: date, shift: SchedulingShift) -> None:
+        iso_year, iso_week, _ = day_obj.isocalendar()
+        week_key = (iso_year, iso_week)
+        stat = stats[resource.id]
+        stat["assignments"] += 1
+        stat["weekly_hours"][week_key] += float(shift.hours)
+        stat["weekly_days"][week_key] += 1
+        last_day: date | None = stat["last_day"]
+        if last_day is not None and (day_obj - last_day).days == 1:
+            stat["consecutive"] += 1
+        else:
+            stat["consecutive"] = 1
+        stat["last_day"] = day_obj
+
+    def sorted_candidates(resources_list: list[SchedulingResource], iso_key: tuple[int, int]) -> list[SchedulingResource]:
+        return sorted(
+            resources_list,
+            key=lambda res: (
+                stats[res.id]["weekly_days"][iso_key],
+                stats[res.id]["assignments"],
+                res.id,
+            ),
+        )
+
+    entries: list[PlanningEntryRead] = []
+
+    for day_obj in month_days:
+        iso_year, iso_week, _ = day_obj.isocalendar()
+        iso_key = (iso_year, iso_week)
+        assigned_ids: set[int] = set()
+        role_counts: dict[str, int] = defaultdict(int)
+        resting_resources = {
+            resource.id
+            for resource in context.resources
+            if day_obj in rest_map.get(resource.id, set())
+        }
+
+        def assign_for_role(
+            role_key: str,
+            allow_extra: bool = False,
+            *,
+            week_key=iso_key,
+            assigned=assigned_ids,
+            rest=resting_resources,
+            target_day=day_obj,
+            counts=role_counts,
+        ) -> bool:
+            candidates = sorted_candidates(role_to_resources.get(role_key, []), week_key)
+            composition = context.rules.rules.shift_rules.composition.get(role_key)
+            for resource in candidates:
+                if resource.id in assigned:
+                    continue
+                if resource.id in rest:
+                    continue
+                shift = choose_shift(resource)
+                if not can_assign(resource, target_day, shift):
+                    continue
+                current = counts[role_key]
+                if composition and composition.max is not None and current >= composition.max:
+                    if not allow_extra:
+                        return False
+                    continue
+                assigned.add(resource.id)
+                register_assignment(resource, target_day, shift)
+                counts[role_key] += 1
+                entries.append(
+                    PlanningEntryRead(
+                        id=len(entries) + 1,
+                        resource_id=resource.id,
+                        date=target_day,
+                        shift_code=shift.code,
+                        absence_type=None,
+                        comment="AUTO-COMPLIANT",
+                    )
+                )
+                return True
+            return False
+
+        for role_key, minimum, _maximum in role_requirements:
+            for _ in range(minimum):
+                assign_for_role(role_key)
+
+        priority_roles = ["cooks", "kitchen_assistants", "apprentices", "pot_washers"]
+        while len(assigned_ids) < daily_target:
+            filled = False
+            for role_key in priority_roles:
+                composition = context.rules.rules.shift_rules.composition.get(role_key)
+                if composition and composition.max is not None and role_counts[role_key] >= composition.max:
+                    continue
+                if assign_for_role(role_key, allow_extra=True):
+                    filled = True
+                    break
+            if not filled:
+                break
+
+        for resource_id in resting_resources:
+            if resource_id in assigned_ids:
+                continue
+            entries.append(
+                PlanningEntryRead(
+                    id=len(entries) + 1,
+                    resource_id=resource_id,
+                    date=day_obj,
+                    shift_code=None,
+                    absence_type="rest_day",
+                    comment="AUTO-COMPLIANT",
+                )
+            )
+
+    violations = evaluate_rule_violations(context, entries)
+    return SchedulingResult(entries=entries, violations=violations)

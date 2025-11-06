@@ -8,12 +8,13 @@
   "planning": {
     "gridTitle": "Monthly plan for {{month}}",
     "resource": "Resource",
+    "role": "Role",
     "resourcePlural": "Resources",
     "tabLabel": "Planning",
     "heroSubtitle": "Review generated schedules, balance hours, and keep master data up to date.",
     "refreshButton": "Refresh data",
     "gridHint": "Use master data to adjust resources or shifts, then refresh the plan.",
-    "unavailableCell": "Not available",
+    "unavailableCell": "Unavailable",
     "availabilityWindow": "{{start}} - {{end}}",
     "preparationTab": "Plan preparation",
     "approvedTab": "Approved plan",
@@ -24,6 +25,7 @@
     "preparationIssues_plural": "{{count}} rule issues",
     "preparationAllClear": "All rules satisfied",
     "generateButton": "Regenerate draft",
+    "generateAndSaveButton": "Generate compliant plan",
     "approvedReady": "Approved plan stored",
     "noApprovedPlan": "Awaiting approval",
     "insightsTitle": "Status breakdown",
@@ -61,6 +63,77 @@
     "dayOverviewPrefers": "Prefers shift(s): {{list}}",
     "dayOverviewAvoids": "Avoids shift(s): {{list}}",
     "dayOverviewWarnings": "Warnings",
+    "generateDialog": {
+      "title": "Generate compliant plan",
+      "description": "Run the compliant planner and save the result as a new version. You can rename the version below.",
+      "label": "Version label",
+      "cancel": "Cancel",
+      "confirm": "Generate and save"
+    },
+    "suggestions": {
+      "title": "Suggested fixes",
+      "subtitle": "Apply these adjustments to eliminate violations.",
+      "date": "Date: {{date}}",
+      "role": "Role: {{role}}",
+      "week": "Week {{week}}",
+      "apply": "Apply change",
+      "appliedLabel": "Applied suggestion: {{title}}",
+      "showAll": "Show all suggestions",
+      "showLess": "Show fewer suggestions",
+      "types": {
+        "assign-role-shortfall": {
+          "title": "Assign {{resource}}",
+          "description": "Assign {{resource}} ({{role}}) to cover the {{role}} shortfall on {{date}}."
+        },
+        "role-min-shortfall": {
+          "title": "Resolve {{role}} shortfall",
+          "description": "No available {{role}} found for {{date}}. Adjust assignments or review availability."
+        },
+        "assign-staffing-shortfall": {
+          "title": "Add {{resource}}",
+          "description": "Assign {{resource}} to cover the staffing shortfall on {{date}}."
+        },
+        "staffing-shortfall": {
+          "title": "Review staffing gap",
+          "description": "No available resource found for {{date}}. Consider adjusting assignments or availability."
+        },
+        "hours-per-week-exceeded": {
+          "title": "Reduce load for {{resource}}",
+          "description": "Remove the assignment on {{date}} so {{resource}} meets weekly limits."
+        },
+        "days-per-week-exceeded": {
+          "title": "Reduce load for {{resource}}",
+          "description": "Remove the assignment on {{date}} so {{resource}} stays within weekly working-day limits."
+        },
+        "consecutive-days-exceeded": {
+          "title": "Insert rest day for {{resource}}",
+          "description": "Add a rest day on {{date}} to break the consecutive streak."
+        },
+        "insufficient-consecutive-rest": {
+          "title": "Give {{resource}} additional rest",
+          "description": "Schedule {{resource}} off on {{date}} to add a rest pair."
+        }
+      }
+    },
+    "ruleStatus": {
+      "heading": "Rule checks",
+      "maxHoursPerWeek": "Max 50 h per resource per week",
+      "maxWorkingDaysPerWeek": "Max 6 working days per week",
+      "maxConsecutiveDays": "Max 6 consecutive working days",
+      "consecutiveRestDays": "At least 2 consecutive days off per month",
+      "minimumDailyStaff": "Minimum 7 resources per day",
+      "roleMinimums": "Role minimums met each day",
+      "roleMaximums": "Role maximums not exceeded",
+      "status": {
+        "ok": "OK"
+      }
+    },
+    "versionHistory": {
+      "title": "Plan history",
+      "entries": "{{count}} entries",
+      "violations": "{{count}} violations",
+      "critical": "{{count}} critical"
+    },
     "violationMessages": {
       "staffing-shortfall": "Only {{assigned}} resources assigned on {{date}}; minimum is {{required}}.",
       "role-min-shortfall": "{{role}} minimum not met on {{date}}: assigned {{assigned}}, required {{min}}.",
@@ -138,7 +211,14 @@
     },
     "roles": {
       "cook": "Cook",
-      "kitchen_assistant": "Kitchen assistant",
+      "kitchen_assistant": "Kitchen asst.",
+      "pot_washer": "Pot washer",
+      "apprentice": "Apprentice",
+      "relief_cook": "Relief cook"
+    },
+    "roleLabels": {
+      "cook": "Cook",
+      "kitchen_assistant": "Kitchen asst.",
       "pot_washer": "Pot washer",
       "apprentice": "Apprentice",
       "relief_cook": "Relief cook"
@@ -163,7 +243,8 @@
       "vacation": "Vacation",
       "sick_leave": "Sick leave",
       "training": "Training",
-      "other": "Other"
+      "other": "Other",
+      "rest_day": "Rest day"
     }
   },
   "summary": {

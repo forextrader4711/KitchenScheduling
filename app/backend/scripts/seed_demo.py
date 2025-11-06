@@ -18,7 +18,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from kitchen_scheduler.core.config import get_settings
 from kitchen_scheduler.db.models.planning import PlanScenario
-from kitchen_scheduler.db.models.resource import Resource, ResourceAbsence, ResourceRole, Shift, ShiftPrimeRule
+from kitchen_scheduler.db.models.resource import (
+    Resource,
+    ResourceAbsence,
+    ResourceRole,
+    Shift,
+    ShiftPrimeRule,
+)
 from kitchen_scheduler.db.models.system import MonthlyParameters
 from kitchen_scheduler.repositories import planning as planning_repo
 from kitchen_scheduler.repositories import resource as resource_repo
@@ -32,7 +38,7 @@ from kitchen_scheduler.services.scheduler import (
     SchedulingContext,
     SchedulingResource,
     SchedulingShift,
-    generate_stub_schedule,
+    generate_rule_compliant_schedule,
 )
 
 
@@ -42,44 +48,54 @@ async def seed() -> None:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
+        await session.execute(
+            text(
+                "TRUNCATE TABLE "
+                "planningentry, "
+                "planversion, "
+                "planscenario, "
+                "monthlyparameters, "
+                "resourceabsence, "
+                "\"resource\", "
+                "shiftprimerule, "
+                "shift "
+                "RESTART IDENTITY CASCADE"
+            )
+        )
         await _ensure_resource_role_enum(session)
         # Seed shifts
-        existing_shifts = await session.scalar(select(func.count(Shift.code)))
-        if not existing_shifts:
-            session.add_all(
-                [
-                    Shift(code=1, description="Standard morning shift", start="07:00", end="16:15", hours=9.25),
-                    Shift(code=4, description="Long shift", start="07:15", end="19:15", hours=12.0),
-                    Shift(code=8, description="Medium shift", start="08:00", end="17:15", hours=9.25),
-                    Shift(code=10, description="Late shift", start="10:15", end="19:30", hours=9.25),
-                ]
-            )
-            session.add_all(
-                [
-                    ShiftPrimeRule(shift_code=1, allowed=True),
-                    ShiftPrimeRule(shift_code=4, allowed=False),
-                    ShiftPrimeRule(shift_code=8, allowed=True),
-                    ShiftPrimeRule(shift_code=10, allowed=True),
-                ]
-            )
+        session.add_all(
+            [
+                Shift(code=1, description="Standard morning shift", start="07:00", end="16:15", hours=9.25),
+                Shift(code=4, description="Long shift", start="07:15", end="19:15", hours=12.0),
+                Shift(code=8, description="Medium shift", start="08:00", end="17:15", hours=9.25),
+                Shift(code=10, description="Late shift", start="10:15", end="19:30", hours=9.25),
+            ]
+        )
+        session.add_all(
+            [
+                ShiftPrimeRule(shift_code=1, allowed=True),
+                ShiftPrimeRule(shift_code=4, allowed=False),
+                ShiftPrimeRule(shift_code=8, allowed=True),
+                ShiftPrimeRule(shift_code=10, allowed=True),
+            ]
+        )
 
         # Seed resources
-        existing_resources = await session.scalar(select(func.count(Resource.id)))
-        if not existing_resources:
-            resources = _build_resources()
-            session.add_all(resources)
+        resources = _build_resources()
+        session.add_all(resources)
 
-            absence_templates = _generate_absence_pairs(date.today().year)
-            for resource, (absence_type, start, end) in zip(resources, cycle(absence_templates), strict=False):
-                session.add(
-                    ResourceAbsence(
-                        resource=resource,
-                        start_date=start,
-                        end_date=end,
-                        absence_type=absence_type,
-                        comment=f"{absence_type.replace('_', ' ').title()} (demo)",
-                    )
+        absence_templates = _generate_absence_pairs(date.today().year)
+        for resource, (absence_type, start, end) in zip(resources, cycle(absence_templates), strict=False):
+            session.add(
+                ResourceAbsence(
+                    resource=resource,
+                    start_date=start,
+                    end_date=end,
+                    absence_type=absence_type,
+                    comment=f"{absence_type.replace('_', ' ').title()} (demo)",
                 )
+            )
 
 
         # Seed monthly parameters
@@ -167,7 +183,7 @@ async def _generate_initial_plan(session, month: str) -> None:
         rules=rule_set,
     )
 
-    result = generate_stub_schedule(context)
+    result = generate_rule_compliant_schedule(context)
 
     response = PlanGenerationResponse(
         entries=result.entries,

@@ -1,0 +1,111 @@
+Here’s a quick tour you can follow to see what’s already wired up in the UI, including exactly where to run each command and whether the Python venv is needed.
+
+1. Prepare backend data
+
+Folder: app/backend
+Environment: activate the venv (source .venv/bin/activate)
+Commands:
+alembic -c alembic.ini upgrade head – creates the tables (uses the default SQLite-on-disk / Postgres URL from settings; adjust KITCHEN_DATABASE_URL if needed).
+python3 scripts/seed_demo.py – inserts demo shifts, resources, monthly parameters, and a draft scenario so the UI has real data.
+2. Run the API
+
+Still in app/backend with venv active:
+uvicorn kitchen_scheduler.main:app --reload
+The server listens on http://127.0.0.1:8000; you can open http://127.0.0.1:8000/docs to inspect all endpoints (system, resources, shifts, planning).
+3. Start the frontend dev server
+
+Folder: app/frontend
+Environment: plain Node (no venv).
+Command: npm run dev
+Vite serves the SPA at http://localhost:5173 and proxies /api calls to the FastAPI server.
+4. Explore the UI
+
+Planning grid: main panel showing a resource-by-day matrix populated from the /planning/generate stub output. It uses whatever month you’re in (ISO YYYY-MM).
+
+Summary panel: right-hand list summarizing worked vs contract hours (currently based on entry count × 8h).
+
+Violations panel: shows scheduling rule warnings/violations returned by the backend (critical/warning/info). With seeded data you should see some messages from the stubbed evaluator.
+
+Language toggle: top-right button switches between English and French; strings live in src/locales/en.json and fr.json.
+If you want to manipulate master data while the UI is running:
+
+Use the Swagger docs (/docs) or any REST client to hit /api/resources, /api/shifts, /api/system/monthly-parameters, /api/planning/scenarios.
+
+After creating/updating records, refresh the UI; the Zustand store fetches resources and scenarios each time loadInitialData runs.
+Current limitations to keep in mind:
+
+The grid is read-only (no drag/drop editing yet).
+Authentication is still stubbed; UI doesn’t prompt for login.
+The scheduler is the deterministic “round-robin” stub, so plan output is simple, but the violation reporting is already hooked up.
+Follow those steps and you’ll see exactly what’s available today. Let me know if you want to script any specific API calls or tweak the seed data.
+
+
+Additional requirements 
+Hello, now that we have started with master data, I assume the next step will be to go more in the
+Planning part. I wonder if you have foreseen a certain way how we attack this?
+I suppose we need to maintain the availabilities and preferences of the resources,
+And then we need to maintain / review the rules and restrictions.
+What do you think?
+
+
+
+Maintain calendars by resource (vacation, preferred day off)
+Name of resources in the same line in the planning overview
+In the planning sheet it should be visible if this is a week end or a holiday
+We need to have another table to maintain public holidays
+
+Last status:
+
+Exactly—now that master data is editable, the planning surface is the next priority. I’d approach it in phases so each layer stays manageable and testable:
+
+1. Availability & Preferences
+
+Extend the resource model (and UI) to capture time‑off, preferred/off limits shifts, language/skill tags, and contract balance targets.
+Build dedicated views for vacation requests, recurring absences, and per-month availability overrides.
+Wire these inputs into the scheduling service so the context passed to the generator reflects reality (percent availability is a blunt instrument right now).
+2. Rule & Restriction Management
+
+Expose rule sets in a richer admin interface: show current thresholds, severity (hard vs soft), and version history.
+Allow planners to clone or tweak rules per scenario/month, with validation (e.g., min ≤ max).
+Surface impact previews: as users adjust a rule, display how many entries in the last plan would violate it.
+3. Scenario Design & Workflow
+
+Let planners define scenarios explicitly—select resources, choose active rule sets, set monthly parameters.
+Show a scenario timeline (draft → published) with version comparisons (hours, violations, coverage).
+Add manual editing tools in the grid (drag-drop, shift assignment palette) with audit logging.
+4. Scheduling Engine Evolution
+
+Replace the stub generator with a rule-aware solver that:
+Honors hard constraints (availability, max hours, role quotas).
+Minimizes soft violation penalties (preferences, desired rest patterns).
+Supports re-optimizing only parts of the plan after manual changes.
+5. Insight & Review
+
+Introduce dashboards: coverage metrics, overtime risk, violation trendline per scenario.
+Provide “what-if” tools (e.g., temporarily remove a resource, tighten a rule) to preview the effect before committing.
+We can tackle these in parallel tracks (data modeling, UI, solver). If you’d like, I can start by mapping the exact fields and endpoints for availability/preferences so we can ship that slice next. Once that’s in place, we handle rule management with proper versioning, then loop back to the planner UX and algorithm.
+
+Let me know which chunk you’d like to focus on first, and I’ll draft the concrete tasks.
+
+overall, yes. Regarding 1: vacation request. I would like to add, that this tool here will be just a planning tool. The vacation will have been decided already in another tool. So we can prepare just a way to maintain the vacations or absence days which have been decided already.
+It reminds me we might need a calendar for official holidays as well. Can you pre-populate something with official holidays of Switzerland, for the "canton de vaud"?
+
+
+
+Hello, can we adopt the seed program, please. The initial situation should be, that all resources from the list are already scheduled to work, according to their availability. I think this corresponds much more to the likely real situation. Then the planner would just make the fine-tuning where there are conflicts or overbooking for particular days. It will make the management of all the violation messages much more realistic.
+What do you think?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

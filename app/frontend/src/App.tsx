@@ -4,13 +4,19 @@ import {
   Box,
   Button,
   Chip,
+  type ChipProps,
   Container,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Fade,
   Grid,
   IconButton,
   Stack,
   Tab,
   Tabs,
+  TextField,
   Toolbar,
   Typography
 } from "@mui/material";
@@ -22,6 +28,8 @@ import MasterDataPanel from "./components/MasterDataPanel";
 import SummaryPanel from "./components/SummaryPanel";
 import ViolationsPanel from "./components/ViolationsPanel";
 import PlanningInsightsPanel from "./components/PlanningInsightsPanel";
+import PlanVersionHistory from "./components/PlanVersionHistory";
+import PlanSuggestionsPanel from "./components/PlanSuggestionsPanel";
 import useScheduleStore from "./state/scheduleStore";
 
 const App = () => {
@@ -37,6 +45,8 @@ const App = () => {
     isLoading
   } = useScheduleStore();
   const [tab, setTab] = useState<"planning" | "masterData">("planning");
+  const [generateDialogOpen, setGenerateDialogOpen] = useState(false);
+  const [versionLabel, setVersionLabel] = useState("");
 
   useEffect(() => {
     void loadInitialData();
@@ -68,7 +78,7 @@ const App = () => {
 
   const preparationViolations = plans.preparation?.violations.length ?? 0;
   const approvedPlan = plans.approved;
-  const statusChip =
+  const statusChip: { color: ChipProps["color"]; label: string } =
     activePhase === "preparation"
       ? {
           color: preparationViolations ? "warning" : "success",
@@ -104,15 +114,23 @@ const App = () => {
 
   const primaryActionLabel =
     activePhase === "preparation"
-      ? t("planning.generateButton", { defaultValue: "Regenerate draft" })
+      ? t("planning.generateAndSaveButton", { defaultValue: "Generate compliant plan" })
       : t("planning.refreshButton", { defaultValue: "Refresh data" });
 
   const handlePrimaryAction = () => {
     if (activePhase === "preparation") {
-      void refreshPreparationPlan();
+      const now = new Date();
+      const formatted = now.toISOString().slice(0, 16).replace("T", " ");
+      setVersionLabel(`Auto ${formatted}`);
+      setGenerateDialogOpen(true);
     } else {
       void loadInitialData();
     }
+  };
+
+  const handleGenerateConfirm = async () => {
+    await refreshPreparationPlan(versionLabel.trim() || undefined);
+    setGenerateDialogOpen(false);
   };
 
   return (
@@ -131,7 +149,7 @@ const App = () => {
         </Toolbar>
       </AppBar>
 
-      <Container maxWidth="xl" sx={{ flexGrow: 1, py: 3 }}>
+      <Container maxWidth={false} sx={{ flexGrow: 1, py: 3, px: { xs: 2, md: 4 } }}>
         <Box
           sx={{
             mb: 4,
@@ -202,20 +220,33 @@ const App = () => {
                 {phaseHint}
               </Typography>
             </Box>
-            <Grid container spacing={3}>
-              <Grid item xs={12} md={8}>
-                <PlanningGrid />
-              </Grid>
-              <Grid item xs={12} md={4}>
-                <Stack spacing={3}>
-                  {activePhase === "preparation" ? (
-                    <>
-                      <PlanningInsightsPanel />
-                      <ViolationsPanel />
-                    </>
-                  ) : null}
-                  {activePhase === "approved" && approvedPlan ? <SummaryPanel /> : null}
-                  {activePhase === "approved" && !approvedPlan ? (
+            <Stack spacing={3}>
+              <PlanningGrid />
+
+              <Grid container spacing={3} alignItems="stretch">
+                {activePhase === "preparation" ? (
+                  <Grid item xs={12} md={6} xl={3}>
+                    <ViolationsPanel />
+                  </Grid>
+                ) : null}
+                {activePhase === "preparation" ? (
+                  <Grid item xs={12} md={6} xl={3}>
+                    <PlanSuggestionsPanel />
+                  </Grid>
+                ) : null}
+                <Grid item xs={12} md={6} xl={3}>
+                  <PlanningInsightsPanel />
+                </Grid>
+                <Grid item xs={12} md={6} xl={3}>
+                  <PlanVersionHistory />
+                </Grid>
+                {activePhase === "approved" && approvedPlan ? (
+                  <Grid item xs={12} md={6} xl={3}>
+                    <SummaryPanel />
+                  </Grid>
+                ) : null}
+                {activePhase === "approved" && !approvedPlan ? (
+                  <Grid item xs={12} md={6} xl={3}>
                     <Box
                       sx={{
                         borderRadius: 3,
@@ -233,10 +264,10 @@ const App = () => {
                         })}
                       </Typography>
                     </Box>
-                  ) : null}
-                </Stack>
+                  </Grid>
+                ) : null}
               </Grid>
-            </Grid>
+            </Stack>
           </Box>
         </Fade>
 
@@ -246,6 +277,32 @@ const App = () => {
           </Box>
         </Fade>
       </Container>
+
+      <Dialog open={generateDialogOpen} onClose={() => setGenerateDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>{t("planning.generateDialog.title")}</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {t("planning.generateDialog.description")}
+          </Typography>
+          <TextField
+            label={t("planning.generateDialog.label")}
+            fullWidth
+            value={versionLabel}
+            onChange={(event) => setVersionLabel(event.target.value)}
+            autoFocus
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setGenerateDialogOpen(false)}>{t("planning.generateDialog.cancel")}</Button>
+          <Button
+            onClick={() => void handleGenerateConfirm()}
+            variant="contained"
+            disabled={isLoading}
+          >
+            {t("planning.generateDialog.confirm")}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

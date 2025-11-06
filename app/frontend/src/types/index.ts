@@ -57,6 +57,33 @@ export interface ViolationItem {
   rawMessage?: string;
 }
 
+export interface RuleStatus {
+  code: string;
+  translationKey: string;
+  status: "ok" | "warning" | "critical";
+  violations: ViolationItem[];
+  count: number;
+}
+
+export interface PlanSuggestedChange {
+  action: "assign_shift" | "set_rest_day" | "remove_assignment";
+  resourceId: number;
+  date: string;
+  shiftCode?: number | null;
+  absenceType?: string | null;
+}
+
+export interface PlanSuggestion {
+  id: string;
+  type: string;
+  title: string;
+  description: string;
+  severity: "info" | "warning" | "critical";
+  relatedViolation?: string | null;
+  change?: PlanSuggestedChange | null;
+  metadata?: Record<string, unknown>;
+}
+
 export interface Shift {
   code: number;
   description: string;

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 from datetime import date
-from itertools import cycle
 
 from kitchen_scheduler.services.rules import load_default_rules
 from kitchen_scheduler.services.scheduler import (
@@ -21,7 +20,7 @@ from kitchen_scheduler.services.scheduler import (
     SchedulingContext,
     SchedulingResource,
     SchedulingShift,
-    generate_stub_schedule,
+    generate_rule_compliant_schedule,
 )
 
 
@@ -124,7 +123,7 @@ def _build_resource_data() -> list[dict]:
             "language": "fr",
             "preferred_shift_codes": [],
             "undesired_shift_codes": [],
-            "availability_template": _weekday_template(workdays=4),
+            "availability_template": _weekday_template(workdays=5),
         },
         {
             "name": "Isabelle Morel",
@@ -144,7 +143,7 @@ def _build_resource_data() -> list[dict]:
             "language": "fr",
             "preferred_shift_codes": [],
             "undesired_shift_codes": [4],
-            "availability_template": _weekday_template(workdays=4),
+            "availability_template": _weekday_template(workdays=5),
         },
         {
             "name": "Karim Senn",
@@ -174,7 +173,7 @@ def _build_resource_data() -> list[dict]:
             "language": "fr",
             "preferred_shift_codes": [1],
             "undesired_shift_codes": [],
-            "availability_template": _weekday_template(workdays=4),
+            "availability_template": _weekday_template(workdays=5),
         },
         {
             "name": "Nina Clément",
@@ -184,7 +183,7 @@ def _build_resource_data() -> list[dict]:
             "language": "fr",
             "preferred_shift_codes": [],
             "undesired_shift_codes": [],
-            "availability_template": _weekday_template(workdays=4),
+            "availability_template": _weekday_template(workdays=5),
         },
         {
             "name": "Olivier Rey",
@@ -238,6 +237,18 @@ def main() -> None:
     absences = _generate_absence_pairs(date.today().year)
 
     print("BEGIN;")
+    print(
+        "TRUNCATE TABLE "
+        "planningentry, "
+        "planversion, "
+        "planscenario, "
+        "monthlyparameters, "
+        "resourceabsence, "
+        "\"resource\", "
+        "shiftprimerule, "
+        "shift "
+        "RESTART IDENTITY CASCADE;"
+    )
 
     for shift in shifts:
         print(
@@ -333,7 +344,7 @@ def main() -> None:
         rules=rule_set,
     )
 
-    result = generate_stub_schedule(context)
+    result = generate_rule_compliant_schedule(context)
 
     print(
         "INSERT INTO planscenario (id, month, name, status, created_at, updated_at, violations) "
@@ -391,4 +402,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

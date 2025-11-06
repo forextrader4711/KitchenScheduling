@@ -53,6 +53,8 @@ async def store_plan_generation(
     session: AsyncSession,
     scenario: PlanScenario,
     payload: PlanGenerationResponse,
+    *,
+    version_label: str | None = None,
 ) -> PlanScenario:
     await session.execute(delete(PlanningEntry).where(PlanningEntry.scenario_id == scenario.id))
 
@@ -74,11 +76,28 @@ async def store_plan_generation(
     await session.flush()
     await session.refresh(scenario)
 
-    count_result = await session.execute(
-        select(func.count(PlanVersion.id)).where(PlanVersion.scenario_id == scenario.id)
-    )
+    count_query = select(func.count(PlanVersion.id)).where(PlanVersion.scenario_id == scenario.id)
+    count_result = await session.execute(count_query)
     existing_count = count_result.scalar_one()
-    next_label = f"v{existing_count + 1}"
+
+    fallback_label = f"v{existing_count + 1}"
+    if version_label:
+        if existing_count:
+            duplicate_query = await session.execute(
+                select(PlanVersion.id).where(
+                    PlanVersion.scenario_id == scenario.id, PlanVersion.version_label == version_label
+                )
+            )
+            if duplicate_query.scalar_one_or_none() is not None:
+                next_label = f"{version_label}-{existing_count + 1}"
+            else:
+                next_label = version_label
+        else:
+            next_label = version_label
+    else:
+        next_label = fallback_label
+
+    next_label = _normalize_version_label(next_label, fallback=fallback_label)
 
     summary = {
         "entries": len(payload.entries),
@@ -155,3 +174,22 @@ async def update_scenario(
 
 async def delete_scenario(session: AsyncSession, scenario: PlanScenario) -> None:
     await session.delete(scenario)
+MAX_VERSION_LABEL_LENGTH = 32
+
+
+def _normalize_version_label(candidate: str, *, fallback: str) -> str:
+    """
+    Trim labels to the database column size while keeping them readable.
+    Falls back to `fallback` if the incoming label is blank after stripping.
+    """
+    label = (candidate or "").strip()
+    if not label:
+        label = fallback
+
+    if len(label) <= MAX_VERSION_LABEL_LENGTH:
+        return label
+
+    if MAX_VERSION_LABEL_LENGTH <= 3:  # defensive guard; current schema uses 32
+        return label[:MAX_VERSION_LABEL_LENGTH]
+
+    return f"{label[:MAX_VERSION_LABEL_LENGTH - 3]}..."

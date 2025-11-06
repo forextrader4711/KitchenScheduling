@@ -1,6 +1,5 @@
-from typing import Annotated
-
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,8 +16,8 @@ from kitchen_scheduler.schemas.system import (
     SchedulingRuleConfigRead,
     SchedulingRuleConfigUpdate,
 )
-from kitchen_scheduler.services.rules import SchedulingRules, load_default_rules
 from kitchen_scheduler.services.holidays import get_vaud_public_holidays
+from kitchen_scheduler.services.rules import SchedulingRules, load_default_rules
 
 router = APIRouter()
 

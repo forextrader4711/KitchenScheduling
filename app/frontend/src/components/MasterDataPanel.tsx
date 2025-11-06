@@ -1,4 +1,4 @@
-import { forwardRef, useMemo, useState } from "react";
+import { forwardRef, useMemo, useRef, useState } from "react";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
@@ -162,6 +162,9 @@ const toSlug = (value: string) =>
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_|_$/g, "");
 
+const DEFAULT_AVAILABILITY_START = "07:15";
+const DEFAULT_AVAILABILITY_END = "19:15";
+
 const defaultAvailabilityTemplate = (): WeeklyAvailabilityEntry[] => [
   "monday",
   "tuesday",
@@ -226,8 +229,14 @@ const AvailabilityEditor = ({
   onChange: (entries: WeeklyAvailabilityEntry[]) => void;
 }) => {
   const { t } = useTranslation();
+  const cachedTimesRef = useRef<Map<WeeklyAvailabilityEntry["day"], { start?: string | null; end?: string | null }>>(
+    new Map()
+  );
 
-  const upsertEntry = (day: WeeklyAvailabilityEntry["day"], updater: (entry: WeeklyAvailabilityEntry) => WeeklyAvailabilityEntry) => {
+  const upsertEntry = (
+    day: WeeklyAvailabilityEntry["day"],
+    updater: (entry: WeeklyAvailabilityEntry) => WeeklyAvailabilityEntry
+  ) => {
     const entriesMap = new Map(value.map((entry) => [entry.day, entry] as const));
     const current = entriesMap.get(day) ?? {
       day,
@@ -268,14 +277,29 @@ const AvailabilityEditor = ({
                 control={
                   <Switch
                     checked={entry.isAvailable}
-                    onChange={(event) =>
-                      upsertEntry(day, (current) => ({
-                        ...current,
-                        isAvailable: event.target.checked,
-                        startTime: event.target.checked ? current.startTime : null,
-                        endTime: event.target.checked ? current.endTime : null
-                      }))
-                    }
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      if (!checked) {
+                        cachedTimesRef.current.set(day, {
+                          start: entry.startTime,
+                          end: entry.endTime
+                        });
+                        upsertEntry(day, (current) => ({
+                          ...current,
+                          isAvailable: false,
+                          startTime: null,
+                          endTime: null
+                        }));
+                      } else {
+                        const cached = cachedTimesRef.current.get(day);
+                        upsertEntry(day, (current) => ({
+                          ...current,
+                          isAvailable: true,
+                          startTime: cached?.start ?? current.startTime ?? DEFAULT_AVAILABILITY_START,
+                          endTime: cached?.end ?? current.endTime ?? DEFAULT_AVAILABILITY_END
+                        }));
+                      }
+                    }}
                     color="primary"
                   />
                 }
@@ -812,6 +836,7 @@ const ResourceManager = ({ onNotify }: { onNotify: (payload: NotifyPayload) => v
               {t("masterData.availability.helper")}
             </Typography>
             <AvailabilityEditor
+              key={formState.id ?? "new"}
               value={formState.availabilityTemplate ?? defaultAvailabilityTemplate()}
               onChange={(entries) =>
                 setFormState((prev) => ({ ...prev, availabilityTemplate: entries }))

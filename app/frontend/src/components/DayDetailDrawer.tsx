@@ -76,11 +76,7 @@ const DayDetailDrawer = ({ open, day, onClose }: DayDetailDrawerProps) => {
 
     const weekday = dateObj
       .toLocaleDateString("en-US", { weekday: "long" })
-      .toLowerCase() as Resource["availabilityTemplate"] extends Array<infer U>
-      ? U extends { day: infer D }
-        ? D
-        : string
-      : string;
+      .toLowerCase();
 
     const resourceMap = new Map<number, Resource>();
     resources.forEach((resource) => resourceMap.set(resource.id, resource));

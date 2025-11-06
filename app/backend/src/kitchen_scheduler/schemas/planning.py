@@ -32,6 +32,7 @@ class PlanScenarioUpdate(BaseModel):
 
 class PlanGenerationRequest(BaseModel):
     month: str
+    label: str | None = None
 
 
 class PlanViolation(BaseModel):
@@ -84,11 +85,39 @@ class PlanInsights(BaseModel):
     monthly: dict[str, PlanInsightItem] = Field(default_factory=dict)
 
 
+class RuleStatus(BaseModel):
+    code: str
+    translation_key: str
+    status: Literal["ok", "warning", "critical"]
+    violations: list[PlanViolation] = Field(default_factory=list)
+
+
+class PlanSuggestedChange(BaseModel):
+    action: Literal["assign_shift", "set_rest_day", "remove_assignment"]
+    resource_id: int
+    date: str  # ISO date
+    shift_code: int | None = None
+    absence_type: str | None = None
+
+
+class PlanSuggestion(BaseModel):
+    id: str
+    type: str
+    title: str
+    description: str
+    severity: Literal["info", "warning", "critical"] = "warning"
+    related_violation: str | None = None
+    change: PlanSuggestedChange | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class PlanPhaseRead(BaseModel):
     scenario: PlanScenarioSummary | None = None
     entries: list[PlanningEntryRead] = Field(default_factory=list)
     violations: list[PlanViolation] = Field(default_factory=list)
     insights: PlanInsights = Field(default_factory=PlanInsights)
+    rule_statuses: list[RuleStatus] = Field(default_factory=list)
+    suggestions: list[PlanSuggestion] = Field(default_factory=list)
 
 
 class PlanOverviewResponse(BaseModel):

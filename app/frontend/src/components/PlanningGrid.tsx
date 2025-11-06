@@ -90,12 +90,22 @@ const PlanningGrid = () => {
     return Array.from({ length: days }, (_, day) => day + 1);
   }, [monthMeta]);
 
-  const resourceMap = useMemo(() => {
+  const resourceNames = useMemo(() => {
     return resources.reduce<Record<number, string>>((acc, resource) => {
       acc[resource.id] = resource.name;
       return acc;
     }, {});
   }, [resources]);
+
+  const resourceRows = useMemo(
+    () =>
+      resources.map((resource) => ({
+        id: resource.id,
+        name: resource.name,
+        role: resource.role
+      })),
+    [resources]
+  );
 
   const cellLookup = useMemo(() => {
     return planningEntries.reduce<Record<string, string>>((acc, entry) => {
@@ -198,7 +208,8 @@ const PlanningGrid = () => {
             <Table size="small" stickyHeader>
             <TableHead>
               <TableRow>
-                <TableCell sx={{ fontWeight: 600 }}>{t("planning.resource")}</TableCell>
+                <TableCell sx={{ fontWeight: 600, py: 0.75 }}>{t("planning.resource")}</TableCell>
+                <TableCell sx={{ fontWeight: 600, py: 0.75 }}>{t("planning.role")}</TableCell>
                 {daysInMonth.map((day) => {
                   const dayKey = monthMeta
                     ? `${monthMeta.isoPrefix}-${String(day).padStart(2, "0")}`
@@ -231,7 +242,7 @@ const PlanningGrid = () => {
                       {dayInsight.violations.map((violation) => (
                         <Typography key={violation.id} variant="caption" display="block">
                           {formatViolationMessage(t, violation, {
-                            resourceNames: resourceMap,
+                            resourceNames,
                             language: i18n.language
                           })}
                         </Typography>
@@ -245,6 +256,7 @@ const PlanningGrid = () => {
                       align="center"
                       sx={{
                         fontWeight: 600,
+                        py: 0.75,
                         borderLeft: day === daysInMonth[0] ? undefined : "1px solid rgba(51, 88, 255, 0.08)",
                         cursor: monthMeta ? "pointer" : "default"
                       }}
@@ -267,9 +279,8 @@ const PlanningGrid = () => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {Object.entries(resourceMap).map(([resourceId, name], rowIndex) => {
-                const numericId = Number.parseInt(resourceId, 10);
-                const resourceInsight = resourceInsights[numericId];
+              {resourceRows.map((resource, rowIndex) => {
+                const resourceInsight = resourceInsights[resource.id];
                 const resourceVisual = resourceInsight ? severityVisuals[resourceInsight.severity] : null;
                 const zebraBg = rowIndex % 2 === 0 ? "rgba(51, 88, 255, 0.02)" : "transparent";
                 const rowBg = resourceVisual ? resourceVisual.bg : zebraBg;
@@ -279,7 +290,7 @@ const PlanningGrid = () => {
                     {resourceInsight.violations.map((violation) => (
                       <Typography key={violation.id} variant="caption" display="block">
                         {formatViolationMessage(t, violation, {
-                          resourceNames: resourceMap,
+                          resourceNames,
                           language: i18n.language
                         })}
                       </Typography>
@@ -289,21 +300,25 @@ const PlanningGrid = () => {
 
                 return (
                   <TableRow
-                    key={resourceId}
+                    key={resource.id}
                     sx={{
                       bgcolor: rowBg,
                       transition: "background-color 150ms ease",
                       "&:hover": { bgcolor: resourceVisual ? resourceVisual.bg : "rgba(51, 88, 255, 0.06)" }
                     }}
                   >
-                    <TableCell component="th" scope="row" sx={{ fontWeight: 600 }}>
-                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                    <TableCell
+                      component="th"
+                      scope="row"
+                      sx={{ fontWeight: 600, py: 0.75, whiteSpace: "nowrap", lineHeight: 1.2 }}
+                    >
+                      <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.75 }}>
                         {resourceInsight ? (
                           <Tooltip title={resourceTooltip} placement="right" arrow>
                             <Box
                               sx={{
-                                width: 10,
-                                height: 10,
+                                width: 8,
+                                height: 8,
                                 borderRadius: "50%",
                                 bgcolor: resourceVisual?.dot ?? "transparent"
                               }}
@@ -313,14 +328,34 @@ const PlanningGrid = () => {
                         <Typography
                           component="span"
                           variant="body2"
-                          sx={{ fontWeight: 600, color: resourceVisual?.text ?? "inherit" }}
+                          sx={{
+                            fontWeight: 600,
+                            color: resourceVisual?.text ?? "inherit",
+                            lineHeight: 1.2,
+                            whiteSpace: "nowrap"
+                          }}
                         >
-                          {name}
+                          {resource.name}
                         </Typography>
                       </Box>
                     </TableCell>
+                    <TableCell
+                      sx={{
+                        whiteSpace: "nowrap",
+                        color: "text.secondary",
+                        fontWeight: 500,
+                        py: 0.75,
+                        lineHeight: 1.2
+                      }}
+                    >
+                      {t(`masterData.roleLabels.${resource.role}`, {
+                        defaultValue: t(`masterData.roles.${resource.role}`, {
+                          defaultValue: resource.role.replace(/_/g, " ")
+                        })
+                      })}
+                    </TableCell>
                     {daysInMonth.map((day, index) => {
-                      const key = `${resourceId}-${day}`;
+                      const key = `${resource.id}-${day}`;
                       const value = cellLookup[key] ?? "";
                       const hint = availabilityHints[key];
                       const status = hint?.status ?? "available";
@@ -360,14 +395,15 @@ const PlanningGrid = () => {
                           key={key}
                           align="center"
                           sx={{
-                            p: 1,
+                            py: 0.75,
+                            px: 0.75,
                             borderLeft: index === 0 ? undefined : "1px solid rgba(51, 88, 255, 0.08)",
                             bgcolor: backgroundColor
                           }}
                         >
                           <Typography
                             variant="body2"
-                            sx={{ fontWeight: value ? 600 : 500 }}
+                            sx={{ fontWeight: value ? 600 : 500, lineHeight: 1.2 }}
                             color={textColor}
                           >
                             {displayLabel}
