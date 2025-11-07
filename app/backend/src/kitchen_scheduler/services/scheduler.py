@@ -71,6 +71,17 @@ class SchedulingResult:
     entries: list[PlanningEntryRead]
     violations: list[SchedulingViolation] = field(default_factory=list)
 
+
+@dataclass
+class _ResourceScheduleState:
+    resource: SchedulingResource
+    rule_role: str
+    weekly_days: dict[tuple[int, int], int] = field(default_factory=dict)
+    weekly_hours: dict[tuple[int, int], float] = field(default_factory=dict)
+    consecutive_days: int = 0
+    total_assignments: int = 0
+    forced_rest_days: set[date] = field(default_factory=set)
+
 ROLE_RULE_KEY_MAP: dict[str, str] = {
     "pot_washer": "pot_washers",
     "kitchen_assistant": "kitchen_assistants",
@@ -86,68 +97,146 @@ def _role_rule_key(role: str) -> str:
 
 def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
     """
-    Placeholder algorithm that spreads resources across days sequentially.
-
-    This allows the frontend to integrate against a deterministic API while the real
-    optimizer is developed (potentially with OR-Tools).
+    Heuristic planner that prioritises working-time safety constraints and then
+    fills daily staffing requirements where possible.
     """
     year, month = map(int, context.month.split("-"))
-    day = date(year, month, 1)
+    month_days = list(_iter_month_days(year, month))
     entries: list[PlanningEntryRead] = []
-    shift_count = len(context.shifts)
-    resource_count = len(context.resources)
 
-    if not resource_count or not shift_count:
+    if not context.resources or not context.shifts:
         return SchedulingResult(entries=entries, violations=[])
 
-    uncovered_days: list[date] = []
+    working_rules = context.rules.rules.working_time
+    shift_rules = context.rules.rules.shift_rules
 
-    resource_assignment_counts: dict[int, int] = {resource.id: 0 for resource in context.resources}
+    resource_states: dict[int, _ResourceScheduleState] = {
+        resource.id: _ResourceScheduleState(
+            resource=resource,
+            rule_role=_role_rule_key(resource.role),
+        )
+        for resource in context.resources
+    }
+
+    _apply_mandatory_rest_days(resource_states, month_days, working_rules)
+
+    role_composition = shift_rules.composition
+    role_minimums = {role: (data.min or 0) for role, data in role_composition.items()}
+    role_maximums = {role: data.max for role, data in role_composition.items()}
+    role_order = list(role_composition.keys())
+
     entry_id = 1
 
-    while day.month == month:
-        available_resources: list[SchedulingResource] = []
-        for resource in context.resources:
-            if _get_absence(resource, day):
-                continue
-            if not _is_available(resource, day):
-                continue
-            available_resources.append(resource)
+    for current_day in month_days:
+        iso_year, iso_week, _ = current_day.isocalendar()
+        iso_key = (iso_year, iso_week)
 
-        if not available_resources:
-            uncovered_days.append(day)
-        else:
-            for resource in available_resources:
-                assignment_idx = resource_assignment_counts.get(resource.id, 0)
-                chosen_shift = _select_shift_for_resource(resource, context.shifts, assignment_idx)
-                entries.append(
-                    PlanningEntryRead(
-                        id=entry_id,
-                        resource_id=resource.id,
-                        date=day,
-                        shift_code=chosen_shift.code if chosen_shift else None,
-                        absence_type=None,
-                        comment="AUTO-STUB",
-                    )
+        assigned_today: set[int] = set()
+        role_counts: dict[str, int] = defaultdict(int)
+
+        def _eligible_states(target_role: str | None = None) -> list[tuple[_ResourceScheduleState, SchedulingShift]]:
+            options: list[tuple[_ResourceScheduleState, SchedulingShift]] = []
+            for state in resource_states.values():
+                if state.resource.id in assigned_today:
+                    continue
+                if target_role and state.rule_role != target_role:
+                    continue
+                if not _resource_available_on_day(state.resource, current_day):
+                    continue
+                if current_day in state.forced_rest_days:
+                    continue
+                shift = _select_shift_for_resource(state.resource, context.shifts, state.total_assignments)
+                if not shift:
+                    continue
+                if not _can_assign_with_shift(state, shift, iso_key, working_rules):
+                    continue
+                options.append((state, shift))
+            return options
+
+        def _select_candidate(options: list[tuple[_ResourceScheduleState, SchedulingShift]]) -> tuple[_ResourceScheduleState, SchedulingShift] | None:
+            if not options:
+                return None
+
+            def _score(item: tuple[_ResourceScheduleState, SchedulingShift]) -> tuple:
+                state, shift = item
+                weekly_days = state.weekly_days.get(iso_key, 0)
+                weekly_hours = state.weekly_hours.get(iso_key, 0.0)
+                role_priority = (
+                    0 if state.resource.role == "cook" else 1 if state.resource.role == "relief_cook" else 2
                 )
-                resource_assignment_counts[resource.id] = assignment_idx + 1
-                entry_id += 1
+                return (
+                    weekly_days,
+                    weekly_hours,
+                    state.consecutive_days,
+                    role_priority,
+                    state.total_assignments,
+                    shift.hours,
+                )
 
-        day += timedelta(days=1)
-    violations = evaluate_rule_violations(context, entries)
+            options.sort(key=_score)
+            return options[0]
 
-    for missing_day in uncovered_days:
-        violations.append(
-            SchedulingViolation(
-                code="uncovered-day",
-                message=f"No available resource for {missing_day.isoformat()}",
-                severity="warning",
-                meta={"date": missing_day.isoformat()},
-                scope="day",
-                day=missing_day,
+        def _assign(state: _ResourceScheduleState, shift: SchedulingShift) -> None:
+            nonlocal entry_id
+            entry = PlanningEntryRead(
+                id=entry_id,
+                resource_id=state.resource.id,
+                date=current_day,
+                shift_code=shift.code,
+                absence_type=None,
+                comment="AUTO-STUB",
             )
-        )
+            entries.append(entry)
+            assigned_today.add(state.resource.id)
+            role_counts[state.rule_role] += 1
 
+            state.total_assignments += 1
+            state.consecutive_days += 1
+            state.weekly_days[iso_key] = state.weekly_days.get(iso_key, 0) + 1
+            state.weekly_hours[iso_key] = state.weekly_hours.get(iso_key, 0.0) + float(shift.hours)
+
+            entry_id += 1
+
+        # Step 1: satisfy minimums per role.
+        for role in role_order:
+            required_min = role_minimums.get(role, 0)
+            while role_counts[role] < required_min:
+                candidate = _select_candidate(_eligible_states(role))
+                if not candidate:
+                    break
+                _assign(*candidate)
+
+        # Step 2: fill remaining slots up to minimum daily staff.
+        def _role_can_accept(state: _ResourceScheduleState) -> bool:
+            role_key = state.rule_role
+            role_max = role_maximums.get(role_key)
+            if role_max is not None and role_counts[role_key] >= role_max:
+                return False
+            return True
+
+        while len(assigned_today) < shift_rules.minimum_daily_staff:
+            candidates = [
+                option
+                for option in _eligible_states()
+                if _role_can_accept(option[0])
+            ]
+            if not candidates:
+                break
+            candidates.sort(
+                key=lambda item: (
+                    0 if item[0].resource.role == "cook" else 1 if item[0].resource.role == "relief_cook" else 2,
+                    item[0].weekly_days.get(iso_key, 0),
+                    item[0].total_assignments,
+                )
+            )
+            _assign(*candidates[0])
+
+        # Step 3: reset consecutive counters for anyone who did not work today.
+        for state in resource_states.values():
+            if state.resource.id not in assigned_today:
+                state.consecutive_days = 0
+
+    violations = evaluate_rule_violations(context, entries)
     return SchedulingResult(entries=entries, violations=violations)
 
 
@@ -176,6 +265,75 @@ def evaluate_rule_violations(
     _apply_working_time_rules(context, entries, shift_hours_map, violations)
 
     return violations
+
+
+def _iter_month_days(year: int, month: int) -> Iterable[date]:
+    current = date(year, month, 1)
+    while current.month == month:
+        yield current
+        current += timedelta(days=1)
+
+
+def _resource_available_on_day(resource: SchedulingResource, target_day: date) -> bool:
+    if _get_absence(resource, target_day):
+        return False
+    return _is_available(resource, target_day)
+
+
+def _can_assign_with_shift(
+    state: _ResourceScheduleState,
+    shift: SchedulingShift,
+    iso_key: tuple[int, int],
+    working_rules,
+) -> bool:
+    next_weekly_days = state.weekly_days.get(iso_key, 0) + 1
+    next_weekly_hours = state.weekly_hours.get(iso_key, 0.0) + float(shift.hours)
+
+    if working_rules.max_working_days_per_week and next_weekly_days > working_rules.max_working_days_per_week:
+        return False
+    if working_rules.max_hours_per_week and next_weekly_hours > working_rules.max_hours_per_week:
+        return False
+    if working_rules.max_consecutive_working_days and state.consecutive_days + 1 > working_rules.max_consecutive_working_days:
+        return False
+    return True
+
+
+def _apply_mandatory_rest_days(
+    resource_states: dict[int, _ResourceScheduleState],
+    month_days: Sequence[date],
+    working_rules,
+) -> None:
+    required_rest = working_rules.required_consecutive_days_off_per_month
+    if required_rest <= 1:
+        return
+
+    for state in resource_states.values():
+        if _existing_rest_block(state.resource, month_days, required_rest):
+            continue
+        forced_rest = _select_rest_window(state.resource, month_days, required_rest)
+        if forced_rest:
+            state.forced_rest_days.update(forced_rest)
+
+
+def _existing_rest_block(resource: SchedulingResource, month_days: Sequence[date], required: int) -> bool:
+    streak = 0
+    for day in month_days:
+        if not _resource_available_on_day(resource, day):
+            streak += 1
+            if streak >= required:
+                return True
+        else:
+            streak = 0
+    return False
+
+
+def _select_rest_window(resource: SchedulingResource, month_days: Sequence[date], required: int) -> set[date]:
+    total_days = len(month_days)
+    for idx in range(total_days - required + 1):
+        window = month_days[idx : idx + required]
+        if all(_resource_available_on_day(resource, day) for day in window):
+            return set(window)
+    return set()
 
 
 def _apply_staffing_rules(
@@ -415,224 +573,4 @@ def _is_available(resource: SchedulingResource, day: date) -> bool:
 def generate_rule_compliant_schedule(context: SchedulingContext) -> SchedulingResult:
     """Produce a deterministic schedule that respects core working-time rules."""
 
-    role_shift_map = {
-        "pot_washer": 10,
-        "kitchen_assistant": 8,
-        "apprentice": 1,
-        "cook": 1,
-        "relief_cook": 1,
-    }
-    role_requirements = [
-        ("pot_washers", 1, 2),
-        ("kitchen_assistants", 2, 2),
-        ("apprentices", 1, 2),
-    ]
-    daily_target = max(context.rules.rules.shift_rules.minimum_daily_staff, 9)
-
-    year, month = map(int, context.month.split("-"))
-    current_day = date(year, month, 1)
-    month_days: list[date] = []
-    while current_day.month == month:
-        month_days.append(current_day)
-        current_day += timedelta(days=1)
-
-    role_to_resources: dict[str, list[SchedulingResource]] = defaultdict(list)
-    for resource in context.resources:
-        role_key = _role_rule_key(resource.role)
-        role_to_resources[role_key].append(resource)
-
-    consecutive_pairs = [
-        (month_days[index], month_days[index + 1])
-        for index in range(len(month_days) - 1)
-        if month_days[index + 1].month == month
-    ]
-
-    rest_map: dict[int, set[date]] = defaultdict(set)
-    if consecutive_pairs:
-        available_indices = list(range(len(consecutive_pairs)))
-
-        def assign_pair(resource_id: int, index_value: int) -> None:
-            pair = consecutive_pairs[index_value]
-            rest_map[resource_id].update(pair)
-            if index_value in available_indices:
-                available_indices.remove(index_value)
-
-        preferred_indices = {
-            "pot_washers": [0, 14],
-            "kitchen_assistants": [4, 10, 16],
-            "apprentices": [6, 22],
-        }
-
-        for role_key, indices in preferred_indices.items():
-            resources_for_role = role_to_resources.get(role_key, [])
-            for resource, index_value in zip(resources_for_role, indices, strict=False):
-                idx = index_value % len(consecutive_pairs)
-                assign_pair(resource.id, idx)
-
-        idx_iter = iter(available_indices)
-        for resources_for_role in role_to_resources.values():
-            for resource in resources_for_role:
-                if resource.id in rest_map:
-                    continue
-                try:
-                    idx = next(idx_iter)
-                except StopIteration:
-                    idx = available_indices[-1] if available_indices else 0
-                assign_pair(resource.id, idx)
-
-    shift_lookup = {shift.code: shift for shift in context.shifts}
-
-    stats = {
-        resource.id: {
-            "assignments": 0,
-            "weekly_hours": defaultdict(float),
-            "weekly_days": defaultdict(int),
-            "last_day": None,
-            "consecutive": 0,
-        }
-        for resource in context.resources
-    }
-
-    def choose_shift(resource: SchedulingResource) -> SchedulingShift | None:
-        code = role_shift_map.get(resource.role, 1)
-        return shift_lookup.get(code) or (context.shifts[0] if context.shifts else None)
-
-    def can_assign(resource: SchedulingResource, day_obj: date, shift: SchedulingShift | None) -> bool:
-        if shift is None:
-            return False
-        if day_obj in rest_map.get(resource.id, set()):
-            return False
-        if _get_absence(resource, day_obj):
-            return False
-        if not _is_available(resource, day_obj):
-            return False
-
-        iso_year, iso_week, _ = day_obj.isocalendar()
-        week_key = (iso_year, iso_week)
-        stat = stats[resource.id]
-
-        if (
-            stat["weekly_hours"][week_key] + float(shift.hours)
-            > context.rules.rules.working_time.max_hours_per_week
-        ):
-            return False
-        max_days_allowed = max(1, context.rules.rules.working_time.max_working_days_per_week - 1)
-        if stat["weekly_days"][week_key] >= max_days_allowed:
-            return False
-        last_day: date | None = stat["last_day"]
-        if last_day is not None and (day_obj - last_day).days == 1:
-            if stat["consecutive"] >= context.rules.rules.working_time.max_consecutive_working_days:
-                return False
-        return True
-
-    def register_assignment(resource: SchedulingResource, day_obj: date, shift: SchedulingShift) -> None:
-        iso_year, iso_week, _ = day_obj.isocalendar()
-        week_key = (iso_year, iso_week)
-        stat = stats[resource.id]
-        stat["assignments"] += 1
-        stat["weekly_hours"][week_key] += float(shift.hours)
-        stat["weekly_days"][week_key] += 1
-        last_day: date | None = stat["last_day"]
-        if last_day is not None and (day_obj - last_day).days == 1:
-            stat["consecutive"] += 1
-        else:
-            stat["consecutive"] = 1
-        stat["last_day"] = day_obj
-
-    def sorted_candidates(resources_list: list[SchedulingResource], iso_key: tuple[int, int]) -> list[SchedulingResource]:
-        return sorted(
-            resources_list,
-            key=lambda res: (
-                stats[res.id]["weekly_days"][iso_key],
-                stats[res.id]["assignments"],
-                res.id,
-            ),
-        )
-
-    entries: list[PlanningEntryRead] = []
-
-    for day_obj in month_days:
-        iso_year, iso_week, _ = day_obj.isocalendar()
-        iso_key = (iso_year, iso_week)
-        assigned_ids: set[int] = set()
-        role_counts: dict[str, int] = defaultdict(int)
-        resting_resources = {
-            resource.id
-            for resource in context.resources
-            if day_obj in rest_map.get(resource.id, set())
-        }
-
-        def assign_for_role(
-            role_key: str,
-            allow_extra: bool = False,
-            *,
-            week_key=iso_key,
-            assigned=assigned_ids,
-            rest=resting_resources,
-            target_day=day_obj,
-            counts=role_counts,
-        ) -> bool:
-            candidates = sorted_candidates(role_to_resources.get(role_key, []), week_key)
-            composition = context.rules.rules.shift_rules.composition.get(role_key)
-            for resource in candidates:
-                if resource.id in assigned:
-                    continue
-                if resource.id in rest:
-                    continue
-                shift = choose_shift(resource)
-                if not can_assign(resource, target_day, shift):
-                    continue
-                current = counts[role_key]
-                if composition and composition.max is not None and current >= composition.max:
-                    if not allow_extra:
-                        return False
-                    continue
-                assigned.add(resource.id)
-                register_assignment(resource, target_day, shift)
-                counts[role_key] += 1
-                entries.append(
-                    PlanningEntryRead(
-                        id=len(entries) + 1,
-                        resource_id=resource.id,
-                        date=target_day,
-                        shift_code=shift.code,
-                        absence_type=None,
-                        comment="AUTO-COMPLIANT",
-                    )
-                )
-                return True
-            return False
-
-        for role_key, minimum, _maximum in role_requirements:
-            for _ in range(minimum):
-                assign_for_role(role_key)
-
-        priority_roles = ["cooks", "kitchen_assistants", "apprentices", "pot_washers"]
-        while len(assigned_ids) < daily_target:
-            filled = False
-            for role_key in priority_roles:
-                composition = context.rules.rules.shift_rules.composition.get(role_key)
-                if composition and composition.max is not None and role_counts[role_key] >= composition.max:
-                    continue
-                if assign_for_role(role_key, allow_extra=True):
-                    filled = True
-                    break
-            if not filled:
-                break
-
-        for resource_id in resting_resources:
-            if resource_id in assigned_ids:
-                continue
-            entries.append(
-                PlanningEntryRead(
-                    id=len(entries) + 1,
-                    resource_id=resource_id,
-                    date=day_obj,
-                    shift_code=None,
-                    absence_type="rest_day",
-                    comment="AUTO-COMPLIANT",
-                )
-            )
-
-    violations = evaluate_rule_violations(context, entries)
-    return SchedulingResult(entries=entries, violations=violations)
+    return generate_stub_schedule(context)

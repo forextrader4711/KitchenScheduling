@@ -1,14 +1,27 @@
 from kitchen_scheduler.schemas.resource import PlanningEntryRead
 from kitchen_scheduler.services.rules import load_default_rules
-from kitchen_scheduler.services.scheduler import SchedulingContext, generate_stub_schedule
+from kitchen_scheduler.services.scheduler import (
+    SchedulingContext,
+    SchedulingResource,
+    SchedulingShift,
+    generate_stub_schedule,
+)
 
 
 def test_generate_stub_schedule_creates_entries_and_violations() -> None:
     rule_set = load_default_rules()
     context = SchedulingContext(
         month="2024-11",
-        resources=[{"id": 1, "role": "cook"}],
-        shifts=[{"code": 1}],
+        resources=[SchedulingResource(id=1, role="cook")],
+        shifts=[
+            SchedulingShift(
+                code=1,
+                description="Test shift",
+                start="08:00",
+                end="16:00",
+                hours=8.0,
+            )
+        ],
         rules=rule_set,
     )
 
