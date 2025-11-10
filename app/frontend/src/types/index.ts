@@ -41,8 +41,13 @@ export interface PlanningEntry {
 export interface SummaryItem {
   resourceId: number;
   name: string;
-  workedHours: number;
-  contractHours: number;
+  actualHours: number;
+  dueHours: number;
+  dueRealHours: number;
+  openingBalanceHours: number;
+  closingBalanceHours: number;
+  workingDays: number;
+  vacationDays: number;
 }
 
 export interface ViolationItem {

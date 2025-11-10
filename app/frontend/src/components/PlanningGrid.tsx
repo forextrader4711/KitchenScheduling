@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Box,
   Card,
@@ -39,6 +39,12 @@ const severityVisuals: Record<"info" | "warning" | "critical", { dot: string; bg
   }
 };
 
+const SHIFT_CODE_LABELS: Record<number, string> = {
+  11: "1p",
+  18: "8p",
+  101: "10p"
+};
+
 type AvailabilityHint =
   | {
       status: "absence";
@@ -62,6 +68,7 @@ const PlanningGrid = () => {
   const planningEntries = activePlan?.entries ?? [];
   const dailyInsights = activePlan?.insights.daily ?? {};
   const resourceInsights = activePlan?.insights.resource ?? {};
+  const summaries = activePlan?.summaries ?? [];
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
   const monthMeta = useMemo(() => {
@@ -97,15 +104,112 @@ const PlanningGrid = () => {
     }, {});
   }, [resources]);
 
+  const rolePriority: Record<string, number> = {
+    cook: 0,
+    relief_cook: 1,
+    kitchen_assistant: 2,
+    pot_washer: 3,
+    apprentice: 4
+  };
+
   const resourceRows = useMemo(
     () =>
-      resources.map((resource) => ({
-        id: resource.id,
-        name: resource.name,
-        role: resource.role
-      })),
+      [...resources]
+        .sort((a, b) => {
+          const priorityDiff = (rolePriority[a.role] ?? 99) - (rolePriority[b.role] ?? 99);
+          if (priorityDiff !== 0) {
+            return priorityDiff;
+          }
+          return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+        })
+        .map((resource) => ({
+          id: resource.id,
+          name: resource.name,
+          role: resource.role
+        })),
     [resources]
   );
+
+  const summaryByResource = useMemo(() => {
+    return summaries.reduce<Record<number, (typeof summaries)[number]>>((acc, summary) => {
+      acc[summary.resourceId] = summary;
+      return acc;
+    }, {});
+  }, [summaries]);
+
+  const formatHours = useCallback((hours?: number) => {
+    if (hours === undefined || hours === null || Number.isNaN(hours)) {
+      return "—";
+    }
+    const sign = hours < 0 ? "-" : "";
+    const totalMinutes = Math.round(Math.abs(hours) * 60);
+    const hh = Math.floor(totalMinutes / 60);
+    const mm = (totalMinutes % 60).toString().padStart(2, "0");
+    return `${sign}${hh}:${mm}`;
+  }, []);
+
+  const metricColumns = useMemo(
+    () => [
+      {
+        key: "actual",
+        label: t("planning.metricColumns.actualHours"),
+        getValue: (summary: (typeof summaries)[number] | undefined) => formatHours(summary?.actualHours)
+      },
+      {
+        key: "due",
+        label: t("planning.metricColumns.dueHours"),
+        getValue: (summary: (typeof summaries)[number] | undefined) => formatHours(summary?.dueHours)
+      },
+      {
+        key: "dueReal",
+        label: t("planning.metricColumns.dueRealHours"),
+        getValue: (summary: (typeof summaries)[number] | undefined) => formatHours(summary?.dueRealHours)
+      },
+      {
+        key: "opening",
+        label: t("planning.metricColumns.openingBalance"),
+        getValue: (summary: (typeof summaries)[number] | undefined) =>
+          formatHours(summary?.openingBalanceHours)
+      },
+      {
+        key: "closing",
+        label: t("planning.metricColumns.closingBalance"),
+        getValue: (summary: (typeof summaries)[number] | undefined) =>
+          formatHours(summary?.closingBalanceHours)
+      }
+    ],
+    [formatHours, t, summaries]
+  );
+
+  const summaryTotals = useMemo(() => {
+    if (!summaries.length) {
+      return null;
+    }
+    return summaries.reduce(
+      (acc, item) => {
+        acc.actual += item.actualHours;
+        acc.due += item.dueHours;
+        acc.dueReal += item.dueRealHours;
+        acc.opening += item.openingBalanceHours;
+        acc.closing += item.closingBalanceHours;
+        return acc;
+      },
+      { actual: 0, due: 0, dueReal: 0, opening: 0, closing: 0 }
+    );
+  }, [summaries]);
+
+  const totalsByDay = useMemo(() => {
+    return daysInMonth.map((day) => {
+      const count = planningEntries.reduce((acc, entry) => {
+        const entryDay = Number(entry.date.split("-")[2]);
+        if (entryDay === day && entry.shiftCode !== null && entry.shiftCode !== undefined) {
+          return acc + 1;
+        }
+        return acc;
+      }, 0);
+      return count;
+    });
+  }, [daysInMonth, planningEntries]);
 
   const cellLookup = useMemo(() => {
     return planningEntries.reduce<Record<string, string>>((acc, entry) => {
@@ -118,7 +222,7 @@ const PlanningGrid = () => {
       const key = `${entry.resourceId}-${dayNumber}`;
       const shiftLabel =
         entry.shiftCode !== undefined && entry.shiftCode !== null
-          ? String(entry.shiftCode)
+          ? SHIFT_CODE_LABELS[entry.shiftCode] ?? String(entry.shiftCode)
           : entry.absenceType ?? "";
       acc[key] = shiftLabel;
       return acc;
@@ -276,6 +380,21 @@ const PlanningGrid = () => {
                     </TableCell>
                   );
                 })}
+                {metricColumns.map((column) => (
+                  <TableCell
+                    key={`metric-header-${column.key}`}
+                    align="right"
+                    sx={{
+                      fontWeight: 600,
+                      py: 0.75,
+                      minWidth: 110,
+                      borderLeft: "1px solid rgba(51, 88, 255, 0.08)",
+                      whiteSpace: "nowrap"
+                    }}
+                  >
+                    {column.label}
+                  </TableCell>
+                ))}
               </TableRow>
             </TableHead>
             <TableBody>
@@ -363,19 +482,21 @@ const PlanningGrid = () => {
                         hint?.status === "absence"
                           ? t(`masterData.absenceTypes.${hint.absenceType}`)
                           : "";
-                      const unavailableLabel = !value && status === "unavailable" ? t("planning.unavailableCell") : "";
-                      const windowLabel =
-                        !value &&
-                        hint?.status === "available" &&
-                        hint.window?.start &&
-                        hint.window?.end
-                          ? t("planning.availabilityWindow", {
-                              start: hint.window.start,
-                              end: hint.window.end
+                      const absenceAbbrev =
+                        hint?.status === "absence"
+                          ? t(`planning.absenceCodes.${hint.absenceType}`, {
+                              defaultValue: t(`masterData.absenceTypes.${hint.absenceType}`)
                             })
                           : "";
+                      const unavailableLabel =
+                        !value && status === "unavailable"
+                          ? t("planning.unavailableCellShort", {
+                              defaultValue: t("planning.unavailableCell")
+                            })
+                          : "";
+                      const windowLabel = "";
 
-                      const displayLabel = value || absenceLabel || unavailableLabel;
+                      const displayLabel = value || absenceAbbrev || unavailableLabel;
                       const secondaryLabel = windowLabel;
                       const backgroundColor =
                         status === "absence"
@@ -390,17 +511,8 @@ const PlanningGrid = () => {
                           ? "text.secondary"
                           : undefined;
 
-                      return (
-                        <TableCell
-                          key={key}
-                          align="center"
-                          sx={{
-                            py: 0.75,
-                            px: 0.75,
-                            borderLeft: index === 0 ? undefined : "1px solid rgba(51, 88, 255, 0.08)",
-                            bgcolor: backgroundColor
-                          }}
-                        >
+                      const innerContent = (
+                        <>
                           <Typography
                             variant="body2"
                             sx={{ fontWeight: value ? 600 : 500, lineHeight: 1.2 }}
@@ -413,12 +525,112 @@ const PlanningGrid = () => {
                               {secondaryLabel}
                             </Typography>
                           ) : null}
+                        </>
+                      );
+
+                      const wrappedContent =
+                        hint?.status === "absence" && absenceLabel ? (
+                          <Tooltip title={absenceLabel} arrow>
+                            <Box component="span" sx={{ display: "inline-block", width: "100%" }}>
+                              {innerContent}
+                            </Box>
+                          </Tooltip>
+                        ) : (
+                          innerContent
+                        );
+
+                      return (
+                        <TableCell
+                          key={key}
+                          align="center"
+                          sx={{
+                            py: 0.75,
+                            px: 0.75,
+                            borderLeft: index === 0 ? undefined : "1px solid rgba(51, 88, 255, 0.08)",
+                            bgcolor: backgroundColor
+                          }}
+                        >
+                          {wrappedContent}
+                        </TableCell>
+                      );
+                    })}
+                {metricColumns.map((column) => {
+                  const summary = summaryByResource[resource.id];
+                  const value = column.getValue(summary);
+                  return (
+                    <TableCell
+                      key={`${resource.id}-${column.key}`}
+                      align="right"
+                          sx={{
+                            py: 0.75,
+                            px: 0.75,
+                            borderLeft: "1px solid rgba(51, 88, 255, 0.08)",
+                            whiteSpace: "nowrap"
+                          }}
+                        >
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                            {value}
+                          </Typography>
                         </TableCell>
                       );
                     })}
                   </TableRow>
                 );
               })}
+              <TableRow
+                sx={{
+                  bgcolor: "rgba(51, 88, 255, 0.06)",
+                  fontWeight: 600
+                }}
+              >
+                <TableCell sx={{ fontWeight: 700, py: 0.75 }}>{t("planning.totalsRowLabel")}</TableCell>
+                <TableCell />
+                {daysInMonth.map((_, index) => (
+                  <TableCell
+                    key={`totals-${index}`}
+                    align="center"
+                    sx={{
+                      py: 0.75,
+                      px: 0.75,
+                      borderLeft: index === 0 ? undefined : "1px solid rgba(51, 88, 255, 0.08)",
+                      fontWeight: 700
+                    }}
+                  >
+                    {totalsByDay[index]}
+                  </TableCell>
+                ))}
+                {metricColumns.map((column) => (
+                  <TableCell
+                    key={`totals-metric-${column.key}`}
+                    align="right"
+                    sx={{
+                      py: 0.75,
+                      px: 0.75,
+                      borderLeft: "1px solid rgba(51, 88, 255, 0.08)",
+                      fontWeight: 700
+                    }}
+                  >
+                    {summaryTotals
+                      ? (() => {
+                          switch (column.key) {
+                            case "actual":
+                              return formatHours(summaryTotals.actual);
+                            case "due":
+                              return formatHours(summaryTotals.due);
+                            case "dueReal":
+                              return formatHours(summaryTotals.dueReal);
+                            case "opening":
+                              return formatHours(summaryTotals.opening);
+                            case "closing":
+                              return formatHours(summaryTotals.closing);
+                            default:
+                              return "—";
+                          }
+                        })()
+                      : "—"}
+                  </TableCell>
+                ))}
+              </TableRow>
             </TableBody>
           </Table>
         </Box>

@@ -14,7 +14,23 @@
     "heroSubtitle": "Review generated schedules, balance hours, and keep master data up to date.",
     "refreshButton": "Refresh data",
     "gridHint": "Use master data to adjust resources or shifts, then refresh the plan.",
+    "metricColumns": {
+      "actualHours": "Actual",
+      "dueHours": "Due",
+      "dueRealHours": "Due real",
+      "openingBalance": "Opening bal.",
+      "closingBalance": "Closing bal."
+    },
+    "absenceCodes": {
+      "vacation": "VAC",
+      "sick_leave": "SICK",
+      "training": "TRN",
+      "other": "OTH",
+      "rest_day": "REST"
+    },
     "unavailableCell": "Unavailable",
+    "unavailableCellShort": "UNAV",
+    "totalsRowLabel": "Total",
     "availabilityWindow": "{{start}} - {{end}}",
     "preparationTab": "Plan preparation",
     "approvedTab": "Approved plan",
@@ -249,10 +265,11 @@
   },
   "summary": {
     "title": "Hours Summary",
-    "hours": "{{worked}} h worked / {{contract}} h contract",
-    "onTrack": "On track",
-    "overTarget": "+{{hours}} h",
-    "underTarget": "{{hours}} h remaining",
+    "hours": "{{actual}} h actual / {{due}} h due ({{dueReal}} h real due)",
+    "balance": "Opening {{opening}} h · Closing {{closing}} h",
+    "onTrack": "Balanced",
+    "overTarget": "+{{hours}} h surplus",
+    "underTarget": "-{{hours}} h shortfall",
     "empty": "No hour summary available yet."
   },
   "violations": {

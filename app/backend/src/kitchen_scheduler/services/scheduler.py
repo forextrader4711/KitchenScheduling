@@ -35,6 +35,8 @@ class SchedulingResource:
     preferred_shift_codes: list[int] = field(default_factory=list)
     undesired_shift_codes: list[int] = field(default_factory=list)
     absences: list[AbsenceWindow] = field(default_factory=list)
+    target_hours: float | None = None
+    is_relief: bool = False
 
 
 @dataclass
@@ -81,6 +83,9 @@ class _ResourceScheduleState:
     consecutive_days: int = 0
     total_assignments: int = 0
     forced_rest_days: set[date] = field(default_factory=set)
+    target_hours: float | None = None
+    monthly_hours: float = 0.0
+    is_relief: bool = False
 
 ROLE_RULE_KEY_MAP: dict[str, str] = {
     "pot_washer": "pot_washers",
@@ -88,6 +93,22 @@ ROLE_RULE_KEY_MAP: dict[str, str] = {
     "apprentice": "apprentices",
     "cook": "cooks",
     "relief_cook": "cooks",
+}
+
+
+ROLE_ALLOWED_SHIFT_CODES: dict[str, set[int]] = {
+    "cook": {1, 4, 11},
+    "relief_cook": {1, 4, 11},
+    "kitchen_assistant": {1, 8, 10, 18, 101},
+    "pot_washer": {8, 10, 18, 101},
+}
+
+ROLE_SELECTION_PRIORITY: dict[str, int] = {
+    "cook": 0,
+    "relief_cook": 1,
+    "kitchen_assistant": 2,
+    "apprentice": 3,
+    "pot_washer": 4,
 }
 
 
@@ -114,6 +135,8 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
         resource.id: _ResourceScheduleState(
             resource=resource,
             rule_role=_role_rule_key(resource.role),
+            target_hours=resource.target_hours,
+            is_relief=resource.is_relief,
         )
         for resource in context.resources
     }
@@ -133,19 +156,48 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
 
         assigned_today: set[int] = set()
         role_counts: dict[str, int] = defaultdict(int)
+        role_shift_assignments: dict[str, list[int]] = defaultdict(list)
 
-        def _eligible_states(target_role: str | None = None) -> list[tuple[_ResourceScheduleState, SchedulingShift]]:
+        def _eligible_states(
+            target_role: str | None = None,
+            *,
+            allow_extra_pot_washers: bool = True,
+            allow_over_target: bool = False,
+        ) -> list[tuple[_ResourceScheduleState, SchedulingShift]]:
             options: list[tuple[_ResourceScheduleState, SchedulingShift]] = []
             for state in resource_states.values():
                 if state.resource.id in assigned_today:
                     continue
                 if target_role and state.rule_role != target_role:
                     continue
+                if (
+                    target_role is None
+                    and not allow_extra_pot_washers
+                    and state.rule_role == "pot_washers"
+                    and role_counts[state.rule_role] >= 1
+                ):
+                    continue
                 if not _resource_available_on_day(state.resource, current_day):
                     continue
                 if current_day in state.forced_rest_days:
                     continue
-                shift = _select_shift_for_resource(state.resource, context.shifts, state.total_assignments)
+                allowed_codes = ROLE_ALLOWED_SHIFT_CODES.get(state.resource.role)
+                preferred_sequence: list[int] | None = None
+                if state.rule_role == "pot_washers":
+                    assigned_codes = role_shift_assignments[state.rule_role]
+                    early_count = sum(code in {8, 18} for code in assigned_codes)
+                    late_count = sum(code in {10, 101} for code in assigned_codes)
+                    if early_count <= late_count:
+                        preferred_sequence = [8, 18, 10, 101]
+                    else:
+                        preferred_sequence = [10, 101, 8, 18]
+                shift = _select_shift_for_resource(
+                    state.resource,
+                    context.shifts,
+                    state.total_assignments,
+                    allowed_codes=allowed_codes,
+                    preferred_sequence=preferred_sequence,
+                )
                 if not shift:
                     continue
                 if not _can_assign_with_shift(state, shift, iso_key, working_rules):
@@ -157,24 +209,24 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
             if not options:
                 return None
 
-            def _score(item: tuple[_ResourceScheduleState, SchedulingShift]) -> tuple:
-                state, shift = item
-                weekly_days = state.weekly_days.get(iso_key, 0)
-                weekly_hours = state.weekly_hours.get(iso_key, 0.0)
-                role_priority = (
-                    0 if state.resource.role == "cook" else 1 if state.resource.role == "relief_cook" else 2
-                )
-                return (
-                    weekly_days,
-                    weekly_hours,
-                    state.consecutive_days,
-                    role_priority,
-                    state.total_assignments,
-                    shift.hours,
-                )
+            best_option: tuple[_ResourceScheduleState, SchedulingShift] | None = None
+            best_score = float("inf")
 
-            options.sort(key=_score)
-            return options[0]
+            for state, shift in options:
+                score = _assignment_cost(
+                    state=state,
+                    shift=shift,
+                    iso_key=iso_key,
+                    working_rules=working_rules,
+                    role_counts=role_counts,
+                    role_minimums=role_minimums,
+                    role_maximums=role_maximums,
+                )
+                if score < best_score:
+                    best_score = score
+                    best_option = (state, shift)
+
+            return best_option
 
         def _assign(state: _ResourceScheduleState, shift: SchedulingShift) -> None:
             nonlocal entry_id
@@ -189,11 +241,13 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
             entries.append(entry)
             assigned_today.add(state.resource.id)
             role_counts[state.rule_role] += 1
+            role_shift_assignments[state.rule_role].append(shift.code)
 
             state.total_assignments += 1
             state.consecutive_days += 1
             state.weekly_days[iso_key] = state.weekly_days.get(iso_key, 0) + 1
             state.weekly_hours[iso_key] = state.weekly_hours.get(iso_key, 0.0) + float(shift.hours)
+            state.monthly_hours += float(shift.hours)
 
             entry_id += 1
 
@@ -201,7 +255,7 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
         for role in role_order:
             required_min = role_minimums.get(role, 0)
             while role_counts[role] < required_min:
-                candidate = _select_candidate(_eligible_states(role))
+                candidate = _select_candidate(_eligible_states(role, allow_over_target=True))
                 if not candidate:
                     break
                 _assign(*candidate)
@@ -214,22 +268,48 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
                 return False
             return True
 
+        def _has_deficit(state: _ResourceScheduleState) -> bool:
+            if state.target_hours is None:
+                return False
+            return state.target_hours - state.monthly_hours > 4.0
+
         while len(assigned_today) < shift_rules.minimum_daily_staff:
             candidates = [
                 option
-                for option in _eligible_states()
+                for option in _eligible_states(allow_extra_pot_washers=False)
                 if _role_can_accept(option[0])
             ]
             if not candidates:
+                candidates = [
+                    option
+                    for option in _eligible_states(allow_extra_pot_washers=True)
+                    if _role_can_accept(option[0])
+                ]
+            if not candidates:
+                candidates = [
+                    option
+                    for option in _eligible_states(allow_extra_pot_washers=True)
+                ]
+            if not candidates:
                 break
-            candidates.sort(
-                key=lambda item: (
-                    0 if item[0].resource.role == "cook" else 1 if item[0].resource.role == "relief_cook" else 2,
-                    item[0].weekly_days.get(iso_key, 0),
-                    item[0].total_assignments,
-                )
-            )
-            _assign(*candidates[0])
+            best = _select_candidate(candidates)
+            if not best:
+                break
+            _assign(*best)
+
+        max_daily_staff = min(len(resource_states), shift_rules.minimum_daily_staff + 4)
+        while len(assigned_today) < max_daily_staff:
+            candidates = [
+                option
+                for option in _eligible_states(allow_extra_pot_washers=True)
+                if _has_deficit(option[0]) and _role_can_accept(option[0])
+            ]
+            if not candidates:
+                break
+            best = _select_candidate(candidates)
+            if not best:
+                break
+            _assign(*best)
 
         # Step 3: reset consecutive counters for anyone who did not work today.
         for state in resource_states.values():
@@ -238,6 +318,79 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
 
     violations = evaluate_rule_violations(context, entries)
     return SchedulingResult(entries=entries, violations=violations)
+
+
+def _assignment_cost(
+    *,
+    state: _ResourceScheduleState,
+    shift: SchedulingShift,
+    iso_key: tuple[int, int],
+    working_rules,
+    role_counts: dict[str, int],
+    role_minimums: dict[str, int],
+    role_maximums: dict[str, int | None],
+) -> float:
+    """
+    Compute a weighted score representing how undesirable it is to assign `state`
+    to `shift` on the current day. Lower scores are preferred.
+    """
+
+    score = 0.0
+    hours = float(shift.hours)
+    projected_hours = state.monthly_hours + hours
+    target_hours = state.target_hours
+
+    # Encourage filling role shortfalls and penalise oversupply.
+    current_role_total = role_counts.get(state.rule_role, 0)
+    role_min = role_minimums.get(state.rule_role, 0)
+    role_max = role_maximums.get(state.rule_role)
+    if current_role_total < role_min:
+        score -= 40.0 * (role_min - current_role_total)
+    elif role_max is not None and current_role_total >= role_max:
+        score += 80.0 * (current_role_total - role_max + 1)
+
+    # Fairness and workload balancing.
+    if target_hours is not None:
+        deficit = max(0.0, target_hours - projected_hours)
+        overage = max(0.0, projected_hours - target_hours)
+        if deficit > 0:
+            score -= min(deficit, hours) * 45.0
+        if overage > 0:
+            score += overage * 25.0
+
+    # Weekly hours safeguard (approach the 50h hard limit cautiously).
+    next_weekly_hours = state.weekly_hours.get(iso_key, 0.0) + hours
+    weekly_buffer = max(0.0, next_weekly_hours - 46.0)
+    score += weekly_buffer * 20.0
+
+    # Consecutive day fatigue – push back before the hard limit triggers.
+    next_consecutive = state.consecutive_days + 1
+    fatigue_threshold = max(0, working_rules.max_consecutive_working_days - 1)
+    if next_consecutive > fatigue_threshold:
+        score += (next_consecutive - fatigue_threshold) * 65.0
+
+    # Weekly days count – avoid hitting the 6-day cap too early.
+    next_weekly_days = state.weekly_days.get(iso_key, 0) + 1
+    if next_weekly_days >= working_rules.max_working_days_per_week:
+        score += 140.0
+
+    # Shift preferences.
+    if shift.code in (state.resource.undesired_shift_codes or []):
+        score += 60.0
+    if shift.code in (state.resource.preferred_shift_codes or []):
+        score -= 30.0
+
+    # Pot washer rotation: gently discourage assigning a second pot washer unless needed.
+    if state.rule_role == "pot_washers" and role_counts.get(state.rule_role, 0) >= 1:
+        score += 40.0
+    if state.is_relief:
+        score += 120.0
+
+    # Small tie-breaker on total assignments to spread workload.
+    score += state.total_assignments * 2.0
+    score += ROLE_SELECTION_PRIORITY.get(state.resource.role, 99)
+
+    return score
 
 
 def evaluate_rule_violations(
@@ -329,11 +482,28 @@ def _existing_rest_block(resource: SchedulingResource, month_days: Sequence[date
 
 def _select_rest_window(resource: SchedulingResource, month_days: Sequence[date], required: int) -> set[date]:
     total_days = len(month_days)
+    if total_days < required:
+        return set()
+
+    midpoint = total_days / 2
+    candidate_windows: list[tuple[float, int, list[date]]] = []
+
     for idx in range(total_days - required + 1):
         window = month_days[idx : idx + required]
-        if all(_resource_available_on_day(resource, day) for day in window):
-            return set(window)
-    return set()
+        if not all(_resource_available_on_day(resource, day) for day in window):
+            continue
+        center = idx + required / 2
+        edge_penalty = 2 if idx == 0 or idx + required == total_days else 0
+        score = abs(center - midpoint) + edge_penalty
+        candidate_windows.append((score, idx, list(window)))
+
+    if not candidate_windows:
+        return set()
+
+    candidate_windows.sort(key=lambda item: (item[0], item[1]))
+    selection_index = resource.id % len(candidate_windows)
+    selected = candidate_windows[selection_index][2]
+    return set(selected)
 
 
 def _apply_staffing_rules(
@@ -535,18 +705,45 @@ def _has_consecutive_days_off(month: str, sorted_dates: Iterable[date], required
             streak = 0
     return False
 def _select_shift_for_resource(
-    resource: SchedulingResource, shifts: Sequence[SchedulingShift], assignment_index: int
+    resource: SchedulingResource,
+    shifts: Sequence[SchedulingShift],
+    assignment_index: int,
+    *,
+    allowed_codes: set[int] | None = None,
+    preferred_sequence: list[int] | None = None,
 ) -> SchedulingShift | None:
     if not shifts:
         return None
 
-    filtered_shifts = [shift for shift in shifts if shift.code not in set(resource.undesired_shift_codes)]
-    preferred_shifts = [
-        shift for shift in filtered_shifts if shift.code in set(resource.preferred_shift_codes)
-    ]
+    allowed_set = allowed_codes if allowed_codes else None
+    undesired_codes = set(resource.undesired_shift_codes or [])
+    preferred_codes = set(resource.preferred_shift_codes or [])
 
-    candidate_pool = preferred_shifts or filtered_shifts or list(shifts)
-    return candidate_pool[assignment_index % len(candidate_pool)]
+    def within_allowed(shift: SchedulingShift) -> bool:
+        return allowed_set is None or shift.code in allowed_set
+
+    candidates = [shift for shift in shifts if within_allowed(shift)]
+    if not candidates:
+        candidates = list(shifts)
+
+    filtered_candidates = [shift for shift in candidates if shift.code not in undesired_codes]
+    preferred_candidates = [shift for shift in filtered_candidates if shift.code in preferred_codes]
+
+    def sequence_key(shift: SchedulingShift, fallback: int) -> tuple[int, int]:
+        if preferred_sequence and shift.code in preferred_sequence:
+            return (preferred_sequence.index(shift.code), shift.code)
+        return (fallback, shift.code)
+
+    if preferred_sequence:
+        preferred_candidates.sort(key=lambda shift: sequence_key(shift, len(preferred_sequence)))
+        filtered_candidates.sort(key=lambda shift: sequence_key(shift, len(preferred_sequence)))
+        candidates.sort(key=lambda shift: sequence_key(shift, len(preferred_sequence) + 1))
+
+    pool = preferred_candidates or filtered_candidates or candidates
+    if not pool:
+        return None
+
+    return pool[assignment_index % len(pool)]
 
 
 def _get_absence(resource: SchedulingResource, day: date) -> AbsenceWindow | None:

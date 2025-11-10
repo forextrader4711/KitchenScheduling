@@ -14,7 +14,23 @@
     "heroSubtitle": "Analysez le planning généré, équilibrez les heures et gardez les données de référence à jour.",
     "refreshButton": "Actualiser les données",
     "gridHint": "Ajustez les ressources ou les shifts via les données de référence puis rafraîchissez le planning.",
+    "metricColumns": {
+      "actualHours": "Temps effectif",
+      "dueHours": "Temps dû",
+      "dueRealHours": "Temps dû réel",
+      "openingBalance": "Solde début",
+      "closingBalance": "Solde fin"
+    },
+    "absenceCodes": {
+      "vacation": "VAC",
+      "sick_leave": "MAL",
+      "training": "FORM",
+      "other": "AUT",
+      "rest_day": "REP"
+    },
     "unavailableCell": "Indisponible",
+    "unavailableCellShort": "INDISP",
+    "totalsRowLabel": "Total",
     "availabilityWindow": "{{start}} - {{end}}",
     "preparationTab": "Préparation du planning",
     "approvedTab": "Planning approuvé",
@@ -178,7 +194,7 @@
       "role": "Rôle",
       "availability": "Disponibilité %",
       "contractHours": "Heures contractuelles par mois",
-      "preferredDaysOff": "Jours de repos préférés",
+      "preferredDaysOff": "Désir de repos",
       "vacationDays": "Jours de congé",
       "language": "Langue",
       "notes": "Notes",
@@ -210,14 +226,14 @@
       "save": "Enregistrer l'absence"
     },
     "roles": {
-      "cook": "Chef de partie",
+      "cook": "Cuisinier",
       "kitchen_assistant": "Assistant cuisine",
       "pot_washer": "Plongeur",
       "apprentice": "Apprenti",
       "relief_cook": "Cuisinier volant"
     },
     "roleLabels": {
-      "cook": "Chef de partie",
+      "cook": "Cuisinier",
       "kitchen_assistant": "Assistant cuisine",
       "pot_washer": "Plongeur",
       "apprentice": "Apprenti",
@@ -249,10 +265,11 @@
   },
   "summary": {
     "title": "Synthèse des heures",
-    "hours": "{{worked}} h effectuées / {{contract}} h contrat",
-    "onTrack": "Objectif atteint",
-    "overTarget": "+{{hours}} h",
-    "underTarget": "{{hours}} h restantes",
+    "hours": "{{actual}} h effectuées / {{due}} h dues ({{dueReal}} h dues réelles)",
+    "balance": "Ouverture {{opening}} h · Clôture {{closing}} h",
+    "onTrack": "Équilibré",
+    "overTarget": "+{{hours}} h de surplus",
+    "underTarget": "-{{hours}} h de déficit",
     "empty": "Aucune synthèse d'heures disponible pour le moment."
   },
   "violations": {

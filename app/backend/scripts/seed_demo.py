@@ -9,7 +9,8 @@ Run this after applying Alembic migrations:
 from __future__ import annotations
 
 import asyncio
-from datetime import date
+import calendar
+from datetime import date, timedelta
 from itertools import cycle, islice
 from typing import Any
 
@@ -40,6 +41,7 @@ from kitchen_scheduler.services.scheduler import (
     SchedulingShift,
     generate_rule_compliant_schedule,
 )
+from kitchen_scheduler.services.holidays import get_vaud_public_holidays
 
 
 async def seed() -> None:
@@ -138,6 +140,7 @@ async def _generate_initial_plan(session, month: str) -> None:
 
     if not resources or not shifts:
         return
+    due_hours = _calculate_due_hours(month)
 
     config = await system_repo.get_active_rule_config(session)
     if config:
@@ -161,6 +164,8 @@ async def _generate_initial_plan(session, month: str) -> None:
                 )
                 for absence in resource.absences
             ],
+            target_hours=due_hours if resource.role != ResourceRole.RELIEF_COOK else None,
+            is_relief=resource.role == ResourceRole.RELIEF_COOK,
         )
         for resource in resources
     ]
@@ -210,6 +215,29 @@ async def _generate_initial_plan(session, month: str) -> None:
     )
     scenario.status = "draft"
     await planning_repo.store_plan_generation(session, scenario, response)
+
+
+def _calculate_due_hours(month: str) -> float:
+    year_str, month_str = month.split("-")
+    year = int(year_str)
+    month_num = int(month_str)
+    last_day = calendar.monthrange(year, month_num)[1]
+    start = date(year, month_num, 1)
+    end = date(year, month_num, last_day)
+
+    holidays = {
+        holiday.date
+        for holiday in get_vaud_public_holidays(year)
+        if start <= holiday.date <= end
+    }
+
+    working_days = 0
+    current = start
+    while current <= end:
+        if current.weekday() < 5 and current not in holidays:
+            working_days += 1
+        current += timedelta(days=1)
+    return working_days * 8.3
 
 
 async def _ensure_resource_role_enum(session) -> None:

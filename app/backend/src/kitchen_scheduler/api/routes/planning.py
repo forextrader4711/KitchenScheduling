@@ -1,5 +1,6 @@
+import calendar
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -19,6 +20,7 @@ from kitchen_scheduler.schemas.planning import (
     PlanInsights,
     PlanOverviewResponse,
     PlanPhaseRead,
+    PlanSummaryItem,
     PlanScenarioCreate,
     PlanScenarioRead,
     PlanScenarioSummary,
@@ -40,6 +42,18 @@ from kitchen_scheduler.services.scheduler import (
     evaluate_rule_violations,
     generate_rule_compliant_schedule,
 )
+from kitchen_scheduler.services.holidays import get_vaud_public_holidays
+
+ROLE_PRIORITY = {
+    "cook": 0,
+    "relief_cook": 1,
+    "kitchen_assistant": 2,
+    "pot_washer": 3,
+    "apprentice": 4,
+}
+
+STANDARD_WORKDAY_HOURS = 8.3
+REAL_WORKDAY_HOURS = 8.5
 
 router = APIRouter()
 
@@ -82,6 +96,105 @@ _RULE_STATUS_DEFINITIONS = [
         "violation_codes": {"role-max-exceeded"},
     },
 ]
+
+
+def _month_bounds(month: str) -> tuple[date, date]:
+    year_str, month_str = month.split("-")
+    year = int(year_str)
+    month_num = int(month_str)
+    start = date(year, month_num, 1)
+    last = calendar.monthrange(year, month_num)[1]
+    end = date(year, month_num, last)
+    return start, end
+
+
+def _working_day_dates(month: str) -> list[date]:
+    start, end = _month_bounds(month)
+    holidays = {holiday.date for holiday in get_vaud_public_holidays(start.year) if start <= holiday.date <= end}
+    working_days: list[date] = []
+    current = start
+    while current <= end:
+        if current.weekday() < 5 and current not in holidays:
+            working_days.append(current)
+        current += timedelta(days=1)
+    return working_days
+
+
+def _vacation_days_for_resource(resource: Resource, working_days: set[date], month: str) -> int:
+    start, end = _month_bounds(month)
+    count = 0
+    for absence in resource.absences or []:
+        if absence.absence_type != "vacation":
+            continue
+        current = max(absence.start_date, start)
+        last = min(absence.end_date, end)
+        while current <= last:
+            if current in working_days:
+                count += 1
+            current += timedelta(days=1)
+    return count
+
+
+def _role_key(resource: Resource) -> str:
+    role = resource.role
+    if hasattr(role, "value"):
+        return str(role.value)
+    return str(role)
+
+
+def _calculate_plan_summaries(
+    month: str,
+    entries: list[PlanningEntryRead],
+    resources: dict[int, Resource],
+    shift_hours: dict[int, float],
+    opening_balances: dict[int, float],
+) -> tuple[list[PlanSummaryItem], dict[int, tuple[float, float]]]:
+    working_day_list = _working_day_dates(month)
+    working_day_set = set(working_day_list)
+    working_day_count = len(working_day_list)
+    due_hours = working_day_count * STANDARD_WORKDAY_HOURS
+    due_real_hours = working_day_count * REAL_WORKDAY_HOURS
+
+    actual_hours_map: dict[int, float] = defaultdict(float)
+    for entry in entries:
+        if entry.shift_code is not None:
+            actual_hours_map[entry.resource_id] += float(shift_hours.get(entry.shift_code, 0.0))
+
+    vacation_days_map: dict[int, int] = {}
+    for resource_id, resource in resources.items():
+        vacation_days = _vacation_days_for_resource(resource, working_day_set, month)
+        vacation_days_map[resource_id] = vacation_days
+        if vacation_days:
+            actual_hours_map[resource_id] -= vacation_days * STANDARD_WORKDAY_HOURS
+
+    closing_updates: dict[int, tuple[float, float]] = {}
+    summaries: list[PlanSummaryItem] = []
+    for resource_id, resource in resources.items():
+        actual_hours = round(actual_hours_map.get(resource_id, 0.0), 2)
+        opening_hours = round(opening_balances.get(resource_id, 0.0), 2)
+        closing_hours = round(opening_hours + actual_hours - due_hours, 2)
+        summaries.append(
+            PlanSummaryItem(
+                resource_id=resource_id,
+                resource_name=resource.name,
+                actual_hours=actual_hours,
+                due_hours=round(due_hours, 2),
+                due_real_hours=round(due_real_hours, 2),
+                opening_balance_hours=opening_hours,
+                closing_balance_hours=closing_hours,
+                working_days=working_day_count,
+                vacation_days=vacation_days_map.get(resource_id, 0),
+            )
+        )
+        closing_updates[resource_id] = (opening_hours, closing_hours)
+
+    summaries.sort(
+        key=lambda item: (
+            ROLE_PRIORITY.get(_role_key(resources[item.resource_id]), 99),
+            resources[item.resource_id].name,
+        )
+    )
+    return summaries, closing_updates
 
 
 @router.get("/scenarios", response_model=list[PlanScenarioRead])
@@ -162,6 +275,8 @@ async def _run_generation(
 ) -> PlanGenerationResponse:
     resources = await resource_repo.list_resources(session)
     shifts = await shift_repo.list_shifts(session)
+    working_day_count = len(_working_day_dates(month))
+    due_hours = working_day_count * STANDARD_WORKDAY_HOURS
 
     config = await system_repo.get_active_rule_config(session)
     if config:
@@ -185,6 +300,8 @@ async def _run_generation(
                 )
                 for absence in resource.absences
             ],
+            target_hours=due_hours if _role_key(resource) != "relief_cook" else None,
+            is_relief=_role_key(resource) == "relief_cook",
         )
         for resource in resources
     ]
@@ -223,6 +340,18 @@ async def _run_generation(
         response,
         version_label=label,
     )
+
+    resource_map = {resource.id: resource for resource in resources}
+    shift_hours_map = {shift.code: float(shift.hours) for shift in scheduling_shifts}
+    opening_balances = await planning_repo.get_opening_balances(session, month)
+    _, closing_updates = _calculate_plan_summaries(
+        month,
+        response.entries,
+        resource_map,
+        shift_hours_map,
+        opening_balances,
+    )
+    await planning_repo.upsert_monthly_balances(session, month, closing_updates)
     await session.commit()
 
     return response
@@ -257,6 +386,9 @@ async def get_plan_overview(
 
     resources = await resource_repo.list_resources(session)
     resource_lookup = {resource.id: resource for resource in resources}
+    shifts = await shift_repo.list_shifts(session)
+    shift_hours_map = {shift.code: float(shift.hours) for shift in shifts}
+    opening_balances = await planning_repo.get_opening_balances(session, month)
 
     scenarios = await planning_repo.preload_scenarios_for_month(session, month)
 
@@ -316,7 +448,10 @@ async def get_plan_overview(
             )
         return statuses
 
-    def _to_phase(scenario, resource_map: dict[int, Resource]) -> PlanPhaseRead:
+    def _to_phase(
+        scenario,
+        resource_map: dict[int, Resource],
+    ) -> PlanPhaseRead:
         summary = PlanScenarioSummary.model_validate(scenario)
         ordered_entries = sorted(scenario.entries, key=lambda entry: (entry.date, entry.resource_id))
         entries = [PlanningEntryRead.model_validate(entry) for entry in ordered_entries]
@@ -327,6 +462,13 @@ async def get_plan_overview(
         insights = _aggregate_insights(violations)
         rule_statuses = _build_rule_statuses(violations)
         suggestions = _build_suggestions(violations, entries, resource_map)
+        summaries, _ = _calculate_plan_summaries(
+            scenario.month,
+            entries,
+            resource_map,
+            shift_hours_map,
+            opening_balances,
+        )
         return PlanPhaseRead(
             scenario=summary,
             entries=entries,
@@ -334,6 +476,7 @@ async def get_plan_overview(
             insights=insights,
             rule_statuses=rule_statuses,
             suggestions=suggestions,
+            summaries=summaries,
         )
 
     preparation = None
@@ -764,6 +907,9 @@ async def apply_suggestion_to_scenario(
     else:
         rule_set = load_default_rules()
 
+    working_day_count = len(_working_day_dates(scenario.month))
+    due_hours = working_day_count * STANDARD_WORKDAY_HOURS
+
     scheduling_resources = [
         SchedulingResource(
             id=res.id,
@@ -780,6 +926,8 @@ async def apply_suggestion_to_scenario(
                 )
                 for absence in res.absences or []
             ],
+            target_hours=due_hours if _role_key(res) != "relief_cook" else None,
+            is_relief=_role_key(res) == "relief_cook",
         )
         for res in resources
     ]

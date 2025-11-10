@@ -77,6 +77,7 @@ type PlanPhaseDto = {
   insights?: PlanInsightsDto;
   rule_statuses?: RuleStatusDto[];
   suggestions?: PlanSuggestionDto[];
+  summaries?: PlanSummaryDto[];
 };
 
 type PlanOverviewDto = {
@@ -121,6 +122,18 @@ type PlanSuggestionDto = {
   related_violation?: string | null;
   change?: PlanSuggestedChangeDto | null;
   metadata?: Record<string, unknown>;
+};
+
+type PlanSummaryDto = {
+  resource_id: number;
+  resource_name: string;
+  actual_hours: number;
+  due_hours: number;
+  due_real_hours: number;
+  opening_balance_hours: number;
+  closing_balance_hours: number;
+  working_days: number;
+  vacation_days: number;
 };
 
 type PlanVersionDto = {
@@ -248,13 +261,23 @@ const fallbackEntries: PlanningEntry[] = [
 ];
 
 const computeSummaries = (entries: PlanningEntry[], resources: Resource[]): SummaryItem[] => {
+  const fallbackWorkingDays = 20;
+  const due = fallbackWorkingDays * 8.3;
+  const dueReal = fallbackWorkingDays * 8.5;
   return resources.map((resource) => {
     const worked = entries.filter((entry) => entry.resourceId === resource.id).length * 8;
+    const opening = 0;
+    const closing = opening + worked - due;
     return {
       resourceId: resource.id,
       name: resource.name,
-      workedHours: worked,
-      contractHours: resource.contractHoursPerMonth
+      actualHours: worked,
+      dueHours: due,
+      dueRealHours: dueReal,
+      openingBalanceHours: opening,
+      closingBalanceHours: closing,
+      workingDays: fallbackWorkingDays,
+      vacationDays: 0
     };
   });
 };
@@ -361,6 +384,23 @@ function mapInsights(insights: PlanInsightsDto | undefined): PlanInsightsState {
     weekly: build(insights.weekly ?? {}, "weekly"),
     monthly: build(insights.monthly ?? {}, "monthly")
   };
+}
+
+function mapSummariesFromDto(summaries: PlanSummaryDto[] | undefined): SummaryItem[] {
+  if (!summaries) {
+    return [];
+  }
+  return summaries.map((summary) => ({
+    resourceId: summary.resource_id,
+    name: summary.resource_name,
+    actualHours: summary.actual_hours,
+    dueHours: summary.due_hours,
+    dueRealHours: summary.due_real_hours,
+    openingBalanceHours: summary.opening_balance_hours,
+    closingBalanceHours: summary.closing_balance_hours,
+    workingDays: summary.working_days,
+    vacationDays: summary.vacation_days
+  }));
 }
 
 function mapRuleStatuses(
@@ -486,7 +526,10 @@ const buildPlanPhaseState = (
       : null,
     entries,
     violations: mapViolations(phase.violations ?? [], `${prefix}-violations`),
-    summaries: computeSummaries(entries, resources),
+    summaries:
+      phase.summaries && phase.summaries.length
+        ? mapSummariesFromDto(phase.summaries)
+        : computeSummaries(entries, resources),
     insights,
     ruleStatuses: mapRuleStatuses(phase.rule_statuses, prefix),
     versions: [],
