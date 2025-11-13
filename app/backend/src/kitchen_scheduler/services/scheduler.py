@@ -104,6 +104,8 @@ ROLE_ALLOWED_SHIFT_CODES: dict[str, set[int]] = {
     "pot_washer": {8, 10, 18, 101},
 }
 
+PRIME_SHIFT_BASE: dict[int, int] = {11: 1, 18: 8, 101: 10}
+
 ROLE_SELECTION_PRIORITY: dict[str, int] = {
     "cook": 0,
     "relief_cook": 1,
@@ -148,10 +150,11 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
     role_minimums = {role: (data.min or 0) for role, data in role_composition.items()}
     role_maximums = {role: data.max for role, data in role_composition.items()}
     role_order = list(role_composition.keys())
+    shift_lookup = {shift.code: shift for shift in context.shifts}
 
     entry_id = 1
 
-    for current_day in month_days:
+    for day_index, current_day in enumerate(month_days):
         iso_year, iso_week, _ = current_day.isocalendar()
         iso_key = (iso_year, iso_week)
 
@@ -222,6 +225,7 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
                     role_counts=role_counts,
                     role_minimums=role_minimums,
                     role_maximums=role_maximums,
+                    shift_lookup=shift_lookup,
                 )
                 if score < best_score:
                     best_score = score
@@ -330,6 +334,7 @@ def _assignment_cost(
     role_counts: dict[str, int],
     role_minimums: dict[str, int],
     role_maximums: dict[str, int | None],
+    shift_lookup: dict[int, SchedulingShift],
 ) -> float:
     """
     Compute a weighted score representing how undesirable it is to assign `state`
@@ -384,6 +389,20 @@ def _assignment_cost(
     # Pot washer rotation: gently discourage assigning a second pot washer unless needed.
     if state.rule_role == "pot_washers" and role_counts.get(state.rule_role, 0) >= 1:
         score += 40.0
+    prime_base = PRIME_SHIFT_BASE.get(shift.code)
+    if prime_base is not None:
+        base_shift = shift_lookup.get(prime_base)
+        if base_shift:
+            base_hours = float(base_shift.hours)
+            projected_week_with_base = state.weekly_hours.get(iso_key, 0.0) + base_hours
+            projected_month_with_base = state.monthly_hours + base_hours
+            exceeds_week = projected_week_with_base > working_rules.max_hours_per_week
+            exceeds_target = (
+                state.target_hours is not None
+                and projected_month_with_base > (state.target_hours + 2)
+            )
+            if not exceeds_week and not exceeds_target:
+                score += 30.0
     if state.is_relief:
         score += 120.0
 

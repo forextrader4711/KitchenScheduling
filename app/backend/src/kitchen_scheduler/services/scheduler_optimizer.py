@@ -21,6 +21,7 @@ from kitchen_scheduler.services.scheduler import (
     _get_absence,
     _role_rule_key,
     evaluate_rule_violations,
+    PRIME_SHIFT_BASE,
 )
 
 HOURS_SCALE = 4  # quarter-hour precision
@@ -34,6 +35,7 @@ class OptimizerConfig:
     relief_shift_penalty: int = 50
     late_hours_threshold: int = 46  # hours per ISO week before penalties
     late_hours_penalty: int = 10
+    prime_optional_penalty: int = 20
 
 
 def _scaled(hours: float) -> int:
@@ -176,9 +178,12 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
 
     # Working-time constraints per resource
     iso_week_to_days: Dict[Tuple[int, int], List[int]] = defaultdict(list)
+    day_to_iso: Dict[int, Tuple[int, int]] = {}
     for index, day in enumerate(month_days):
         iso_year, iso_week, _ = day.isocalendar()
-        iso_week_to_days[(iso_year, iso_week)].append(index)
+        iso_key = (iso_year, iso_week)
+        iso_week_to_days[iso_key].append(index)
+        day_to_iso[index] = iso_key
 
     for resource in context.resources:
         total_hours = model.NewIntVar(0, max_month_units, f"total_hours_{resource.id}")
@@ -244,6 +249,10 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
                 var = shift_vars.get((resource.id, day_index, shift_code))
                 if var is not None:
                     objective_terms.append(var * config.undesired_shift_penalty)
+            for prime_code, base_code in PRIME_SHIFT_BASE.items():
+                var_prime = shift_vars.get((resource.id, day_index, prime_code))
+                if var_prime is not None:
+                    objective_terms.append(var_prime * config.prime_optional_penalty)
 
     # Solve
     solver = cp_model.CpSolver()
