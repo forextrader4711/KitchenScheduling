@@ -63,7 +63,7 @@ type AvailabilityHint =
 
 const PlanningGrid = () => {
   const { t, i18n } = useTranslation();
-  const { isLoading, month, plans, activePhase, resources } = useScheduleStore();
+  const { isLoading, month, plans, activePhase, resources, holidays } = useScheduleStore();
   const activePlan = plans[activePhase];
   const planningEntries = activePlan?.entries ?? [];
   const dailyInsights = activePlan?.insights.daily ?? {};
@@ -103,6 +103,9 @@ const PlanningGrid = () => {
       return acc;
     }, {});
   }, [resources]);
+
+  const holidaySet = useMemo(() => new Set(holidays), [holidays]);
+  const weekendBg = "rgba(148, 163, 184, 0.12)";
 
   const rolePriority: Record<string, number> = {
     cook: 0,
@@ -320,6 +323,13 @@ const PlanningGrid = () => {
                     : String(day);
                   const dayInsight = dailyInsights[dayKey];
                   const dayVisual = dayInsight ? severityVisuals[dayInsight.severity] : null;
+                  const dayDate =
+                    monthMeta !== null
+                      ? new Date(monthMeta.year, monthMeta.monthIndex, day)
+                      : undefined;
+                  const isWeekend = dayDate ? dayDate.getDay() === 0 || dayDate.getDay() === 6 : false;
+                  const isHoliday = monthMeta ? holidaySet.has(dayKey) : false;
+                  const columnBg = isWeekend || isHoliday ? weekendBg : undefined;
                   const headerContent = (
                     <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.5 }}>
                       <Typography
@@ -362,7 +372,8 @@ const PlanningGrid = () => {
                         fontWeight: 600,
                         py: 0.75,
                         borderLeft: day === daysInMonth[0] ? undefined : "1px solid rgba(51, 88, 255, 0.08)",
-                        cursor: monthMeta ? "pointer" : "default"
+                        cursor: monthMeta ? "pointer" : "default",
+                        bgcolor: columnBg
                       }}
                       onClick={() => {
                         if (monthMeta) {
@@ -498,6 +509,17 @@ const PlanningGrid = () => {
 
                       const displayLabel = value || absenceAbbrev || unavailableLabel;
                       const secondaryLabel = windowLabel;
+                      const dayDate =
+                        monthMeta !== null
+                          ? new Date(monthMeta.year, monthMeta.monthIndex, day)
+                          : undefined;
+                      const dayKey =
+                        monthMeta !== null
+                          ? `${monthMeta.isoPrefix}-${String(day).padStart(2, "0")}`
+                          : String(day);
+                      const isWeekend = dayDate ? dayDate.getDay() === 0 || dayDate.getDay() === 6 : false;
+                      const isHoliday = monthMeta ? holidaySet.has(dayKey) : false;
+                      const columnBg = isWeekend || isHoliday ? weekendBg : undefined;
                       const backgroundColor =
                         status === "absence"
                           ? "rgba(220, 38, 38, 0.12)"
@@ -547,7 +569,7 @@ const PlanningGrid = () => {
                             py: 0.75,
                             px: 0.75,
                             borderLeft: index === 0 ? undefined : "1px solid rgba(51, 88, 255, 0.08)",
-                            bgcolor: backgroundColor
+                            bgcolor: backgroundColor ?? columnBg
                           }}
                         >
                           {wrappedContent}
@@ -585,20 +607,34 @@ const PlanningGrid = () => {
               >
                 <TableCell sx={{ fontWeight: 700, py: 0.75 }}>{t("planning.totalsRowLabel")}</TableCell>
                 <TableCell />
-                {daysInMonth.map((_, index) => (
-                  <TableCell
-                    key={`totals-${index}`}
-                    align="center"
-                    sx={{
-                      py: 0.75,
-                      px: 0.75,
-                      borderLeft: index === 0 ? undefined : "1px solid rgba(51, 88, 255, 0.08)",
-                      fontWeight: 700
-                    }}
-                  >
-                    {totalsByDay[index]}
-                  </TableCell>
-                ))}
+                {daysInMonth.map((day, index) => {
+                  const dayDate =
+                    monthMeta !== null
+                      ? new Date(monthMeta.year, monthMeta.monthIndex, day)
+                      : undefined;
+                  const dayKey =
+                    monthMeta !== null
+                      ? `${monthMeta.isoPrefix}-${String(day).padStart(2, "0")}`
+                      : String(day);
+                  const isWeekend = dayDate ? dayDate.getDay() === 0 || dayDate.getDay() === 6 : false;
+                  const isHoliday = monthMeta ? holidaySet.has(dayKey) : false;
+                  const columnBg = isWeekend || isHoliday ? weekendBg : undefined;
+                  return (
+                    <TableCell
+                      key={`totals-${index}`}
+                      align="center"
+                      sx={{
+                        py: 0.75,
+                        px: 0.75,
+                        borderLeft: index === 0 ? undefined : "1px solid rgba(51, 88, 255, 0.08)",
+                        fontWeight: 700,
+                        bgcolor: columnBg
+                      }}
+                    >
+                      {totalsByDay[index]}
+                    </TableCell>
+                  );
+                })}
                 {metricColumns.map((column) => (
                   <TableCell
                     key={`totals-metric-${column.key}`}

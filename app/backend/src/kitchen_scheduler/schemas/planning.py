@@ -111,6 +111,18 @@ class PlanSuggestion(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class PlanSummaryItem(BaseModel):
+    resource_id: int
+    resource_name: str
+    actual_hours: float
+    due_hours: float
+    due_real_hours: float
+    opening_balance_hours: float
+    closing_balance_hours: float
+    working_days: int
+    vacation_days: int
+
+
 class PlanPhaseRead(BaseModel):
     scenario: PlanScenarioSummary | None = None
     entries: list[PlanningEntryRead] = Field(default_factory=list)
@@ -118,9 +130,11 @@ class PlanPhaseRead(BaseModel):
     insights: PlanInsights = Field(default_factory=PlanInsights)
     rule_statuses: list[RuleStatus] = Field(default_factory=list)
     suggestions: list[PlanSuggestion] = Field(default_factory=list)
+    summaries: list[PlanSummaryItem] = Field(default_factory=list)
 
 
 class PlanOverviewResponse(BaseModel):
     month: str
     preparation: PlanPhaseRead | None = None
     approved: PlanPhaseRead | None = None
+    holidays: list[str] = Field(default_factory=list)

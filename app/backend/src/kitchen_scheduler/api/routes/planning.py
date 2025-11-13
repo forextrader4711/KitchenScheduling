@@ -1,7 +1,7 @@
 import calendar
 from collections import defaultdict
 from datetime import date, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -39,9 +39,11 @@ from kitchen_scheduler.services.scheduler import (
     SchedulingContext,
     SchedulingResource,
     SchedulingShift,
+    SchedulingViolation,
     evaluate_rule_violations,
     generate_rule_compliant_schedule,
 )
+from kitchen_scheduler.services.scheduler_optimizer import generate_optimised_schedule
 from kitchen_scheduler.services.holidays import get_vaud_public_holidays
 
 ROLE_PRIORITY = {
@@ -120,6 +122,15 @@ def _working_day_dates(month: str) -> list[date]:
     return working_days
 
 
+def _holiday_dates(month: str) -> list[date]:
+    start, end = _month_bounds(month)
+    return [
+        holiday.date
+        for holiday in get_vaud_public_holidays(start.year)
+        if start <= holiday.date <= end
+    ]
+
+
 def _vacation_days_for_resource(resource: Resource, working_days: set[date], month: str) -> int:
     start, end = _month_bounds(month)
     count = 0
@@ -152,9 +163,6 @@ def _calculate_plan_summaries(
     working_day_list = _working_day_dates(month)
     working_day_set = set(working_day_list)
     working_day_count = len(working_day_list)
-    due_hours = working_day_count * STANDARD_WORKDAY_HOURS
-    due_real_hours = working_day_count * REAL_WORKDAY_HOURS
-
     actual_hours_map: dict[int, float] = defaultdict(float)
     for entry in entries:
         if entry.shift_code is not None:
@@ -172,14 +180,18 @@ def _calculate_plan_summaries(
     for resource_id, resource in resources.items():
         actual_hours = round(actual_hours_map.get(resource_id, 0.0), 2)
         opening_hours = round(opening_balances.get(resource_id, 0.0), 2)
+        availability_percent = getattr(resource, "availability_percent", 100) or 100
+        availability_factor = max(availability_percent, 0) / 100.0
+        due_hours = round(working_day_count * STANDARD_WORKDAY_HOURS * availability_factor, 2)
+        due_real_hours = round(working_day_count * REAL_WORKDAY_HOURS * availability_factor, 2)
         closing_hours = round(opening_hours + actual_hours - due_hours, 2)
         summaries.append(
             PlanSummaryItem(
                 resource_id=resource_id,
                 resource_name=resource.name,
                 actual_hours=actual_hours,
-                due_hours=round(due_hours, 2),
-                due_real_hours=round(due_real_hours, 2),
+                due_hours=due_hours,
+                due_real_hours=due_real_hours,
                 opening_balance_hours=opening_hours,
                 closing_balance_hours=closing_hours,
                 working_days=working_day_count,
@@ -267,11 +279,33 @@ def _map_violation(v):
     )
 
 
+def _summarize_optimizer_shortfalls(violations: list[SchedulingViolation]) -> tuple[str | None, dict[str, list[str]]]:
+    shortfalls: dict[str, set[str]] = {}
+    for violation in violations:
+        if violation.code not in {"role-min-shortfall", "staffing-shortfall"}:
+            continue
+        if violation.day is None:
+            continue
+        day_key = violation.day.isoformat() if isinstance(violation.day, date) else str(violation.day)
+        role_label = (
+            str(violation.meta.get("role") or violation.meta.get("rule") or "staffing")
+            if violation.code == "role-min-shortfall"
+            else "staffing"
+        )
+        shortfalls.setdefault(day_key, set()).add(role_label)
+    if not shortfalls:
+        return None, {}
+    segments = [f"{day}: {', '.join(sorted(roles))}" for day, roles in sorted(shortfalls.items())]
+    message = "Optimizer fallback: insufficient coverage for " + "; ".join(segments)
+    return message, {day: sorted(roles) for day, roles in shortfalls.items()}
+
+
 async def _run_generation(
     session: AsyncSession,
     month: str,
     *,
     label: str | None = None,
+    strategy: Literal["heuristic", "optimized"] = "heuristic",
 ) -> PlanGenerationResponse:
     resources = await resource_repo.list_resources(session)
     shifts = await shift_repo.list_shifts(session)
@@ -323,7 +357,26 @@ async def _run_generation(
         shifts=scheduling_shifts,
         rules=rule_set,
     )
-    result = generate_rule_compliant_schedule(context)
+    if strategy == "optimized":
+        optimized_result = generate_optimised_schedule(context)
+        optimizer_violation = any(violation.code == "optimizer-failed" for violation in optimized_result.violations)
+        if optimizer_violation or not optimized_result.entries:
+            result = generate_rule_compliant_schedule(context)
+            summary, meta = _summarize_optimizer_shortfalls(result.violations)
+            if summary:
+                result.violations.append(
+                    SchedulingViolation(
+                        code="optimizer-infeasible",
+                        message=summary,
+                        severity="warning",
+                        scope="schedule",
+                        meta={"shortfalls": meta},
+                    )
+                )
+        else:
+            result = optimized_result
+    else:
+        result = generate_rule_compliant_schedule(context)
     violations = [_map_violation(v) for v in result.violations]
     response = PlanGenerationResponse(entries=result.entries, violations=violations)
 
@@ -338,7 +391,7 @@ async def _run_generation(
         session,
         scenario,
         response,
-        version_label=label,
+        version_label=label or ("Optimized" if strategy == "optimized" else None),
     )
 
     resource_map = {resource.id: resource for resource in resources}
@@ -362,7 +415,15 @@ async def generate_plan(
     payload: PlanGenerationRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> PlanGenerationResponse:
-    return await _run_generation(session, payload.month, label=payload.label)
+    return await _run_generation(session, payload.month, label=payload.label, strategy="heuristic")
+
+
+@router.post("/generate/optimized", response_model=PlanGenerationResponse)
+async def generate_optimized_plan(
+    payload: PlanGenerationRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> PlanGenerationResponse:
+    return await _run_generation(session, payload.month, label=payload.label, strategy="optimized")
 
 
 @router.post("/scenarios/{scenario_id}/generate", response_model=PlanGenerationResponse)
@@ -389,6 +450,7 @@ async def get_plan_overview(
     shifts = await shift_repo.list_shifts(session)
     shift_hours_map = {shift.code: float(shift.hours) for shift in shifts}
     opening_balances = await planning_repo.get_opening_balances(session, month)
+    holiday_dates = [holiday.isoformat() for holiday in _holiday_dates(month)]
 
     scenarios = await planning_repo.preload_scenarios_for_month(session, month)
 
@@ -489,7 +551,7 @@ async def get_plan_overview(
             if preparation is None:
                 preparation = _to_phase(scenario, resource_lookup)
 
-    return PlanOverviewResponse(month=month, preparation=preparation, approved=approved)
+    return PlanOverviewResponse(month=month, preparation=preparation, approved=approved, holidays=holiday_dates)
 
 
 def _build_suggestions(

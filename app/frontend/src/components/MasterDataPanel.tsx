@@ -421,7 +421,7 @@ const ResourceManager = ({ onNotify }: { onNotify: (payload: NotifyPayload) => v
     name: "",
     role: roleOptions[0].value,
     availabilityPercent: 100,
-    contractHoursPerMonth: 160,
+    contractHoursPerMonth: 0,
     preferredDaysOff: "",
     vacationDays: "",
     language: "en",
@@ -478,7 +478,7 @@ const ResourceManager = ({ onNotify }: { onNotify: (payload: NotifyPayload) => v
         name: "",
         role: roleOptions[0].value,
         availabilityPercent: 100,
-        contractHoursPerMonth: 160,
+        contractHoursPerMonth: 0,
         preferredDaysOff: "",
         vacationDays: "",
         language: "en",
@@ -661,7 +661,6 @@ const ResourceManager = ({ onNotify }: { onNotify: (payload: NotifyPayload) => v
               </Stack>
             </TableCell>
             <TableCell align="right">{t("masterData.columns.availability")}</TableCell>
-            <TableCell align="right">{t("masterData.columns.contractHours")}</TableCell>
             <TableCell>{t("masterData.columns.language")}</TableCell>
             <TableCell align="right" width={120}>
               {t("masterData.columns.actions")}
@@ -695,7 +694,6 @@ const ResourceManager = ({ onNotify }: { onNotify: (payload: NotifyPayload) => v
               />
             </TableCell>
               <TableCell align="right">{resource.availabilityPercent}</TableCell>
-              <TableCell align="right">{resource.contractHoursPerMonth}</TableCell>
               <TableCell>{resource.language}</TableCell>
               <TableCell align="right">
                 <IconButton aria-label="edit" size="small" onClick={() => handleOpenDialog(resource)}>
@@ -714,7 +712,7 @@ const ResourceManager = ({ onNotify }: { onNotify: (payload: NotifyPayload) => v
           ))}
           {resources.length === 0 && (
             <TableRow>
-              <TableCell colSpan={6}>
+              <TableCell colSpan={5}>
                 <Typography variant="body2" color="text.secondary">
                   {t("masterData.noResources")}
                 </Typography>
@@ -750,27 +748,16 @@ const ResourceManager = ({ onNotify }: { onNotify: (payload: NotifyPayload) => v
                 </MenuItem>
               ))}
             </TextField>
-              <Stack direction="row" spacing={2}>
-              <TextField
-                label={t("masterData.form.availability")}
-                type="number"
-                value={formState.availabilityPercent}
-                onChange={(event) =>
-                  setFormState((prev) => ({ ...prev, availabilityPercent: Number(event.target.value) }))
-                }
-                fullWidth
-                inputProps={{ min: 0, max: 100 }}
-              />
-              <TextField
-                label={t("masterData.form.contractHours")}
-                type="number"
-                value={formState.contractHoursPerMonth}
-                onChange={(event) =>
-                  setFormState((prev) => ({ ...prev, contractHoursPerMonth: Number(event.target.value) }))
-                }
-                fullWidth
-              />
-            </Stack>
+            <TextField
+              label={t("masterData.form.availability")}
+              type="number"
+              value={formState.availabilityPercent}
+              onChange={(event) =>
+                setFormState((prev) => ({ ...prev, availabilityPercent: Number(event.target.value) }))
+              }
+              fullWidth
+              inputProps={{ min: 0, max: 100 }}
+            />
             <TextField
               label={t("masterData.form.preferredDaysOff")}
               value={formState.preferredDaysOff ?? ""}

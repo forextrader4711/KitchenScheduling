@@ -42,6 +42,7 @@
     "preparationAllClear": "All rules satisfied",
     "generateButton": "Regenerate draft",
     "generateAndSaveButton": "Generate compliant plan",
+    "generateOptimizedButton": "Generate optimized plan",
     "approvedReady": "Approved plan stored",
     "noApprovedPlan": "Awaiting approval",
     "insightsTitle": "Status breakdown",
@@ -84,7 +85,10 @@
       "description": "Run the compliant planner and save the result as a new version. You can rename the version below.",
       "label": "Version label",
       "cancel": "Cancel",
-      "confirm": "Generate and save"
+      "confirm": "Generate and save",
+      "optimizedTitle": "Generate optimized plan",
+      "optimizedDescription": "Use the optimisation solver to satisfy all rules and balance hours automatically.",
+      "optimizedConfirm": "Run optimiser"
     },
     "suggestions": {
       "title": "Suggested fixes",
@@ -180,7 +184,6 @@
       "name": "Name",
       "role": "Role",
       "availability": "Availability %",
-      "contractHours": "Contract hours",
       "language": "Language",
       "actions": "Actions",
       "code": "Code",
@@ -193,7 +196,6 @@
       "name": "Name",
       "role": "Role",
       "availability": "Availability %",
-      "contractHours": "Contract hours per month",
       "preferredDaysOff": "Preferred days off",
       "vacationDays": "Vacation days",
       "language": "Language",

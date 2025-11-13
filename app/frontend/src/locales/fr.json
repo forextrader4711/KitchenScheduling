@@ -42,6 +42,7 @@
     "preparationAllClear": "Toutes les règles sont respectées",
     "generateButton": "Régénérer le brouillon",
     "generateAndSaveButton": "Générer un planning conforme",
+    "generateOptimizedButton": "Générer un planning optimisé",
     "approvedReady": "Planning approuvé disponible",
     "noApprovedPlan": "En attente d'approbation",
     "insightsTitle": "Synthèse des statuts",
@@ -84,7 +85,10 @@
       "description": "Lancez le calcul conforme et enregistrez le résultat comme nouvelle version. Vous pouvez renommer la version ci-dessous.",
       "label": "Nom de la version",
       "cancel": "Annuler",
-      "confirm": "Générer et enregistrer"
+      "confirm": "Générer et enregistrer",
+      "optimizedTitle": "Générer un planning optimisé",
+      "optimizedDescription": "Utilisez le solveur d'optimisation pour respecter toutes les règles et équilibrer automatiquement les heures.",
+      "optimizedConfirm": "Lancer l'optimisation"
     },
     "suggestions": {
       "title": "Propositions de corrections",
@@ -180,7 +184,6 @@
       "name": "Nom",
       "role": "Rôle",
       "availability": "Disponibilité %",
-      "contractHours": "Heures contractuelles",
       "language": "Langue",
       "actions": "Actions",
       "code": "Code",
@@ -193,7 +196,6 @@
       "name": "Nom",
       "role": "Rôle",
       "availability": "Disponibilité %",
-      "contractHours": "Heures contractuelles par mois",
       "preferredDaysOff": "Désir de repos",
       "vacationDays": "Jours de congé",
       "language": "Langue",

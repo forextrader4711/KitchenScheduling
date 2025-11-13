@@ -37,6 +37,7 @@ const App = () => {
   const {
     loadInitialData,
     refreshPreparationPlan,
+    generateOptimisedPlan,
     month,
     resources,
     plans,
@@ -47,6 +48,7 @@ const App = () => {
   const [tab, setTab] = useState<"planning" | "masterData">("planning");
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false);
   const [versionLabel, setVersionLabel] = useState("");
+  const [generateMode, setGenerateMode] = useState<"heuristic" | "optimized">("heuristic");
 
   useEffect(() => {
     void loadInitialData();
@@ -119,6 +121,7 @@ const App = () => {
 
   const handlePrimaryAction = () => {
     if (activePhase === "preparation") {
+      setGenerateMode("heuristic");
       const now = new Date();
       const formatted = now.toISOString().slice(0, 16).replace("T", " ");
       setVersionLabel(`Auto ${formatted}`);
@@ -128,8 +131,20 @@ const App = () => {
     }
   };
 
+  const handleOptimizedAction = () => {
+    setGenerateMode("optimized");
+    const now = new Date();
+    const formatted = now.toISOString().slice(0, 16).replace("T", " ");
+    setVersionLabel(`Optimized ${formatted}`);
+    setGenerateDialogOpen(true);
+  };
+
   const handleGenerateConfirm = async () => {
-    await refreshPreparationPlan(versionLabel.trim() || undefined);
+    if (generateMode === "optimized") {
+      await generateOptimisedPlan(versionLabel.trim() || undefined);
+    } else {
+      await refreshPreparationPlan(versionLabel.trim() || undefined);
+    }
     setGenerateDialogOpen(false);
   };
 
@@ -186,6 +201,11 @@ const App = () => {
               }`}
             />
             <Chip color={statusChip.color} label={statusChip.label} />
+            {activePhase === "preparation" ? (
+              <Button variant="outlined" disabled={isLoading} onClick={handleOptimizedAction}>
+                {t("planning.generateOptimizedButton", { defaultValue: "Generate optimized plan" })}
+              </Button>
+            ) : null}
             <Button variant="contained" disabled={isLoading} onClick={handlePrimaryAction}>
               {primaryActionLabel}
             </Button>
@@ -279,10 +299,18 @@ const App = () => {
       </Container>
 
       <Dialog open={generateDialogOpen} onClose={() => setGenerateDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>{t("planning.generateDialog.title")}</DialogTitle>
+        <DialogTitle>
+          {generateMode === "optimized"
+            ? t("planning.generateDialog.optimizedTitle", { defaultValue: "Generate optimized plan" })
+            : t("planning.generateDialog.title")}
+        </DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            {t("planning.generateDialog.description")}
+            {generateMode === "optimized"
+              ? t("planning.generateDialog.optimizedDescription", {
+                  defaultValue: "Run the optimisation solver to produce a fully compliant plan."
+                })
+              : t("planning.generateDialog.description")}
           </Typography>
           <TextField
             label={t("planning.generateDialog.label")}
@@ -299,7 +327,9 @@ const App = () => {
             variant="contained"
             disabled={isLoading}
           >
-            {t("planning.generateDialog.confirm")}
+            {generateMode === "optimized"
+              ? t("planning.generateDialog.optimizedConfirm", { defaultValue: "Run optimiser" })
+              : t("planning.generateDialog.confirm")}
           </Button>
         </DialogActions>
       </Dialog>

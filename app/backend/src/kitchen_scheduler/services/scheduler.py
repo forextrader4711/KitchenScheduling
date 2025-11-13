@@ -100,6 +100,7 @@ ROLE_ALLOWED_SHIFT_CODES: dict[str, set[int]] = {
     "cook": {1, 4, 11},
     "relief_cook": {1, 4, 11},
     "kitchen_assistant": {1, 8, 10, 18, 101},
+    "apprentice": {1, 11},
     "pot_washer": {8, 10, 18, 101},
 }
 

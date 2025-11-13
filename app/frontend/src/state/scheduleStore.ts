@@ -84,6 +84,7 @@ type PlanOverviewDto = {
   month: string;
   preparation?: PlanPhaseDto | null;
   approved?: PlanPhaseDto | null;
+  holidays?: string[];
 };
 
 type PlanInsightItemDto = {
@@ -212,9 +213,11 @@ interface ScheduleState {
   resources: Resource[];
   plans: Record<PlanPhaseKey, PlanPhaseState | null>;
   activePhase: PlanPhaseKey;
+  holidays: string[];
   setActivePhase: (phase: PlanPhaseKey) => void;
   loadInitialData: () => Promise<void>;
   refreshPreparationPlan: (label?: string) => Promise<void>;
+  generateOptimisedPlan: (label?: string) => Promise<void>;
   refreshOverviewOnly: () => Promise<void>;
 }
 
@@ -546,6 +549,7 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
     approved: null
   },
   activePhase: "preparation",
+  holidays: [],
   setActivePhase: (phase) =>
     set((state) => {
       if (phase === "approved" && !state.plans.approved) {
@@ -616,14 +620,16 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
         approvedPlan = { ...approvedPlan, versions };
       }
 
+      const resolvedMonth = overview.month ?? fallbackMonth;
       set({
-        month: fallbackMonth,
+        month: resolvedMonth,
         resources,
         plans: {
           preparation: preparationPlan,
           approved: approvedPlan
         },
         activePhase: preparationPlan ? "preparation" : approvedPlan ? "approved" : "preparation",
+        holidays: overview.holidays ?? [],
         isLoading: false
       });
     } catch (error) {
@@ -645,6 +651,7 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
           approved: null
         },
         activePhase: "preparation",
+        holidays: [],
         isLoading: false
       });
     }
@@ -652,47 +659,22 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
   refreshPreparationPlan: async (label?: string) => {
     const month = get().month ?? new Date().toISOString().slice(0, 7);
     set({ isLoading: true });
-
     try {
       await api.post("/planning/generate", { month, label });
-      const overviewResponse = await api.get<PlanOverviewDto>("/planning/overview", {
-        params: { month }
-      });
-      const resources = get().resources.length ? get().resources : fallbackResources;
-      let preparationPlan = buildPlanPhaseState(
-        overviewResponse.data.preparation,
-        resources,
-        overviewResponse.data.preparation?.scenario?.id
-          ? `scenario-${overviewResponse.data.preparation.scenario.id}-prep`
-          : "preparation"
-      );
-      if (preparationPlan?.scenario) {
-        const versions = await fetchPlanVersions(preparationPlan.scenario.id);
-        preparationPlan = { ...preparationPlan, versions };
-      }
-
-      let approvedPlan = buildPlanPhaseState(
-        overviewResponse.data.approved,
-        resources,
-        overviewResponse.data.approved?.scenario?.id
-          ? `scenario-${overviewResponse.data.approved.scenario.id}-approved`
-          : "approved"
-      );
-      if (approvedPlan?.scenario) {
-        const versions = await fetchPlanVersions(approvedPlan.scenario.id);
-        approvedPlan = { ...approvedPlan, versions };
-      }
-
-      set((state) => ({
-        plans: {
-          preparation: preparationPlan,
-          approved: approvedPlan
-        },
-        activePhase: preparationPlan ? state.activePhase : approvedPlan ? "approved" : "preparation",
-        isLoading: false
-      }));
+      await get().refreshOverviewOnly();
     } catch (error) {
       console.warn("Failed to refresh preparation plan.", error);
+      set({ isLoading: false });
+    }
+  },
+  generateOptimisedPlan: async (label?: string) => {
+    const month = get().month ?? new Date().toISOString().slice(0, 7);
+    set({ isLoading: true });
+    try {
+      await api.post("/planning/generate/optimized", { month, label });
+      await get().refreshOverviewOnly();
+    } catch (error) {
+      console.warn("Failed to generate optimized plan.", error);
       set({ isLoading: false });
     }
   },
@@ -729,12 +711,15 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
         approvedPlan = { ...approvedPlan, versions };
       }
 
+      const resolvedMonth = overviewResponse.data.month ?? month;
       set((state) => ({
         plans: {
           preparation: preparationPlan,
           approved: approvedPlan
         },
         activePhase: preparationPlan ? state.activePhase : approvedPlan ? "approved" : "preparation",
+        month: resolvedMonth,
+        holidays: overviewResponse.data.holidays ?? state.holidays,
         isLoading: false
       }));
     } catch (error) {
