@@ -167,6 +167,8 @@ def _calculate_plan_summaries(
     for entry in entries:
         if entry.shift_code is not None:
             actual_hours_map[entry.resource_id] += float(shift_hours.get(entry.shift_code, 0.0))
+        elif entry.absence_type == "sick_leave":
+            actual_hours_map[entry.resource_id] += STANDARD_WORKDAY_HOURS
 
     vacation_days_map: dict[int, int] = {}
     for resource_id, resource in resources.items():

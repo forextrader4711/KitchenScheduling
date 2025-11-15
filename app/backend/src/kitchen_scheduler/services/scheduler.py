@@ -97,14 +97,15 @@ ROLE_RULE_KEY_MAP: dict[str, str] = {
 
 
 ROLE_ALLOWED_SHIFT_CODES: dict[str, set[int]] = {
-    "cook": {1, 4, 11},
-    "relief_cook": {1, 4, 11},
-    "kitchen_assistant": {1, 8, 10, 18, 101},
-    "apprentice": {1, 11},
-    "pot_washer": {8, 10, 18, 101},
+    "cook": {1, 4},
+    "relief_cook": {1, 4},
+    "kitchen_assistant": {1, 8, 10},
+    "apprentice": {1},
+    "pot_washer": {8, 10},
 }
 
 PRIME_SHIFT_BASE: dict[int, int] = {11: 1, 18: 8, 101: 10}
+BASE_TO_PRIME_SHIFT: dict[int, int] = {base: prime for prime, base in PRIME_SHIFT_BASE.items()}
 
 ROLE_SELECTION_PRIORITY: dict[str, int] = {
     "cook": 0,
@@ -114,9 +115,20 @@ ROLE_SELECTION_PRIORITY: dict[str, int] = {
     "pot_washer": 4,
 }
 
+MONTHLY_OVERRUN_TOLERANCE = 2.0
+
 
 def _role_rule_key(role: str) -> str:
     return ROLE_RULE_KEY_MAP.get(role, role)
+
+
+def daily_staff_target(context: SchedulingContext) -> int:
+    shift_rules = context.rules.rules.shift_rules
+    min_staff = shift_rules.minimum_daily_staff
+    available = max(len(context.resources), min_staff)
+    if available <= min_staff:
+        return min_staff
+    return min_staff + 1 if available > min_staff else min_staff
 
 
 def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
@@ -151,6 +163,7 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
     role_maximums = {role: data.max for role, data in role_composition.items()}
     role_order = list(role_composition.keys())
     shift_lookup = {shift.code: shift for shift in context.shifts}
+    daily_target = daily_staff_target(context)
 
     entry_id = 1
 
@@ -189,12 +202,12 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
                 preferred_sequence: list[int] | None = None
                 if state.rule_role == "pot_washers":
                     assigned_codes = role_shift_assignments[state.rule_role]
-                    early_count = sum(code in {8, 18} for code in assigned_codes)
-                    late_count = sum(code in {10, 101} for code in assigned_codes)
+                    early_count = sum(code == 8 for code in assigned_codes)
+                    late_count = sum(code == 10 for code in assigned_codes)
                     if early_count <= late_count:
-                        preferred_sequence = [8, 18, 10, 101]
+                        preferred_sequence = [8, 10]
                     else:
-                        preferred_sequence = [10, 101, 8, 18]
+                        preferred_sequence = [10, 8]
                 shift = _select_shift_for_resource(
                     state.resource,
                     context.shifts,
@@ -203,6 +216,13 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
                     preferred_sequence=preferred_sequence,
                 )
                 if not shift:
+                    continue
+                if (
+                    not allow_over_target
+                    and state.target_hours is not None
+                    and state.monthly_hours + float(shift.hours)
+                    > state.target_hours + MONTHLY_OVERRUN_TOLERANCE
+                ):
                     continue
                 if not _can_assign_with_shift(state, shift, iso_key, working_rules):
                     continue
@@ -226,6 +246,8 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
                     role_minimums=role_minimums,
                     role_maximums=role_maximums,
                     shift_lookup=shift_lookup,
+                    current_assignments=len(assigned_today),
+                    daily_target=daily_target,
                 )
                 if score < best_score:
                     best_score = score
@@ -278,31 +300,45 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
                 return False
             return state.target_hours - state.monthly_hours > 4.0
 
-        while len(assigned_today) < shift_rules.minimum_daily_staff:
-            candidates = [
-                option
-                for option in _eligible_states(allow_extra_pot_washers=False)
-                if _role_can_accept(option[0])
-            ]
-            if not candidates:
+        def _fill_day(target: int) -> None:
+            while len(assigned_today) < target:
                 candidates = [
                     option
-                    for option in _eligible_states(allow_extra_pot_washers=True)
+                    for option in _eligible_states(allow_extra_pot_washers=False)
                     if _role_can_accept(option[0])
                 ]
-            if not candidates:
-                candidates = [
-                    option
-                    for option in _eligible_states(allow_extra_pot_washers=True)
-                ]
-            if not candidates:
-                break
-            best = _select_candidate(candidates)
-            if not best:
-                break
-            _assign(*best)
+                if not candidates:
+                    candidates = [
+                        option
+                        for option in _eligible_states(allow_extra_pot_washers=True)
+                        if _role_can_accept(option[0])
+                    ]
+                if not candidates:
+                    candidates = [
+                        option
+                        for option in _eligible_states(allow_extra_pot_washers=True)
+                    ]
+                if not candidates:
+                    candidates = [
+                        option
+                        for option in _eligible_states(
+                            allow_extra_pot_washers=True, allow_over_target=True
+                        )
+                    ]
+                if not candidates:
+                    break
+                best = _select_candidate(candidates)
+                if not best:
+                    break
+                _assign(*best)
 
-        max_daily_staff = min(len(resource_states), shift_rules.minimum_daily_staff + 4)
+        _fill_day(shift_rules.minimum_daily_staff)
+
+        linear_target = max(shift_rules.minimum_daily_staff, daily_target)
+        if len(assigned_today) < linear_target:
+            _fill_day(linear_target)
+
+        max_daily_staff = min(len(resource_states), linear_target + 1)
         while len(assigned_today) < max_daily_staff:
             candidates = [
                 option
@@ -321,6 +357,7 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
             if state.resource.id not in assigned_today:
                 state.consecutive_days = 0
 
+    apply_prime_shift_relaxation(context, entries)
     violations = evaluate_rule_violations(context, entries)
     return SchedulingResult(entries=entries, violations=violations)
 
@@ -335,6 +372,8 @@ def _assignment_cost(
     role_minimums: dict[str, int],
     role_maximums: dict[str, int | None],
     shift_lookup: dict[int, SchedulingShift],
+    current_assignments: int,
+    daily_target: int,
 ) -> float:
     """
     Compute a weighted score representing how undesirable it is to assign `state`
@@ -403,6 +442,8 @@ def _assignment_cost(
             )
             if not exceeds_week and not exceeds_target:
                 score += 30.0
+    if state.target_hours is not None and projected_hours > state.target_hours + MONTHLY_OVERRUN_TOLERANCE:
+        score += (projected_hours - state.target_hours) * 120.0
     if state.is_relief:
         score += 120.0
 
@@ -410,7 +451,102 @@ def _assignment_cost(
     score += state.total_assignments * 2.0
     score += ROLE_SELECTION_PRIORITY.get(state.resource.role, 99)
 
+    projected_day_total = current_assignments + 1
+    if projected_day_total > max(daily_target, 0):
+        score += (projected_day_total - daily_target) * 75.0
+
     return score
+
+
+def apply_prime_shift_relaxation(context: SchedulingContext, entries: list[PlanningEntryRead]) -> None:
+    weekly_limit = context.rules.rules.working_time.max_hours_per_week
+    if weekly_limit <= 0 or not entries:
+        return
+    shift_hours = {shift.code: float(shift.hours) for shift in context.shifts}
+    if not shift_hours:
+        return
+    base_to_prime = {
+        base: prime for base, prime in BASE_TO_PRIME_SHIFT.items() if base in shift_hours and prime in shift_hours
+    }
+    if not base_to_prime:
+        return
+
+    resource_lookup = {resource.id: resource for resource in context.resources}
+    weekly_totals: dict[tuple[int, int, int], float] = defaultdict(float)
+    weekly_candidates: dict[tuple[int, int, int], list[tuple[float, int, int]]] = defaultdict(list)
+    monthly_totals: dict[int, float] = defaultdict(float)
+    monthly_candidates: dict[int, list[tuple[float, int, int]]] = defaultdict(list)
+
+    for index, entry in enumerate(entries):
+        if entry.shift_code is None:
+            continue
+        hours = shift_hours.get(entry.shift_code, 0.0)
+        iso_year, iso_week, _ = entry.date.isocalendar()
+        week_key = (entry.resource_id, iso_year, iso_week)
+        weekly_totals[week_key] += hours
+        monthly_totals[entry.resource_id] += hours
+        prime_code = base_to_prime.get(entry.shift_code)
+        if prime_code is None:
+            continue
+        delta = hours - shift_hours.get(prime_code, hours)
+        if delta <= 0:
+            continue
+        weekly_candidates[week_key].append((delta, index, prime_code))
+        monthly_candidates[entry.resource_id].append((delta, index, prime_code))
+
+    def _mark_conversion(idx: int, prime_code: int) -> float:
+        entry = entries[idx]
+        if entry.shift_code == prime_code:
+            return 0.0
+        base_code = entry.shift_code
+        base_hours = shift_hours.get(base_code, 0.0)
+        prime_hours = shift_hours.get(prime_code, base_hours)
+        if base_hours <= prime_hours:
+            return 0.0
+        entry.shift_code = prime_code
+        base_comment = entry.comment or "AUTO-STUB"
+        lower_comment = base_comment.lower()
+        if "prime adjustment" not in lower_comment:
+            entry.comment = f"{base_comment} (prime adjustment)"
+        return base_hours - prime_hours
+
+    for key, options in weekly_candidates.items():
+        total = weekly_totals.get(key, 0.0)
+        if total <= weekly_limit:
+            continue
+        options.sort(key=lambda item: item[0], reverse=True)
+        for _delta, idx, prime_code in options:
+            if total <= weekly_limit:
+                break
+            delta = _mark_conversion(idx, prime_code)
+            if delta <= 0:
+                continue
+            total -= delta
+            weekly_totals[key] = total
+            resource_id = entries[idx].resource_id
+            monthly_totals[resource_id] -= delta
+
+    for resource_id, options in monthly_candidates.items():
+        resource = resource_lookup.get(resource_id)
+        target = getattr(resource, "target_hours", None)
+        if target is None:
+            continue
+        target_limit = target + MONTHLY_OVERRUN_TOLERANCE
+        total = monthly_totals.get(resource_id, 0.0)
+        if total <= target_limit:
+            continue
+        options.sort(key=lambda item: item[0], reverse=True)
+        for _delta, idx, prime_code in options:
+            if total <= target_limit:
+                break
+            delta = _mark_conversion(idx, prime_code)
+            if delta <= 0:
+                continue
+            total -= delta
+            monthly_totals[resource_id] = total
+            iso_year, iso_week, _ = entries[idx].date.isocalendar()
+            week_key = (resource_id, iso_year, iso_week)
+            weekly_totals[week_key] = max(weekly_totals.get(week_key, 0.0) - delta, 0.0)
 
 
 def evaluate_rule_violations(

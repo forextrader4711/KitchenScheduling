@@ -3,7 +3,7 @@
     "working_time": {
       "max_hours_per_week": 50,
       "max_working_days_per_week": 6,
-      "max_consecutive_working_days": 6,
+      "max_consecutive_working_days": 5,
       "required_consecutive_days_off_per_month": 2,
       "days_off_patterns": ["Saturday + Sunday", "Sunday + Monday"]
     },

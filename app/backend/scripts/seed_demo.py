@@ -294,7 +294,7 @@ def _build_resources() -> list[Resource]:
             name="Camille Perret",
             role=ResourceRole.COOK,
             contract_hours_per_month=150,
-            availability_percent=90,
+            availability_percent=80,
             language="fr",
             preferred_shift_codes=[10],
             availability_template=_weekday_template(workdays=4, weekend=True),
@@ -313,7 +313,7 @@ def _build_resources() -> list[Resource]:
             name="Estelle Girard",
             role=ResourceRole.COOK,
             contract_hours_per_month=140,
-            availability_percent=90,
+            availability_percent=100,
             language="fr",
             preferred_shift_codes=[8],
             availability_template=_weekday_template(workdays=4),
@@ -331,7 +331,7 @@ def _build_resources() -> list[Resource]:
             name="Géraldine Weber",
             role=ResourceRole.COOK,
             contract_hours_per_month=150,
-            availability_percent=95,
+            availability_percent=100,
             language="fr",
             preferred_shift_codes=[1, 8],
             availability_template=_weekday_template(workdays=5),
@@ -351,7 +351,7 @@ def _build_resources() -> list[Resource]:
             name="Isabelle Morel",
             role=ResourceRole.KITCHEN_ASSISTANT,
             contract_hours_per_month=130,
-            availability_percent=85,
+            availability_percent=100,
             language="fr",
             preferred_shift_codes=[8, 10],
             availability_template=_weekday_template(workdays=5),
@@ -360,7 +360,7 @@ def _build_resources() -> list[Resource]:
             name="Julien Mercier",
             role=ResourceRole.KITCHEN_ASSISTANT,
             contract_hours_per_month=120,
-            availability_percent=75,
+            availability_percent=100,
             language="fr",
             undesired_shift_codes=[4],
             availability_template=_weekday_template(workdays=4),
@@ -381,7 +381,7 @@ def _build_resources() -> list[Resource]:
             name="Louise Hertig",
             role=ResourceRole.POT_WASHER,
             contract_hours_per_month=110,
-            availability_percent=90,
+            availability_percent=100,
             language="fr",
             availability_template=_weekday_template(workdays=5, weekend=True),
         ),
@@ -392,7 +392,7 @@ def _build_resources() -> list[Resource]:
             name="Maël Schneider",
             role=ResourceRole.APPRENTICE,
             contract_hours_per_month=100,
-            availability_percent=60,
+            availability_percent=100,
             language="fr",
             preferred_shift_codes=[1],
             availability_template=_weekday_template(workdays=4),
@@ -401,7 +401,7 @@ def _build_resources() -> list[Resource]:
             name="Nina Clément",
             role=ResourceRole.APPRENTICE,
             contract_hours_per_month=110,
-            availability_percent=70,
+            availability_percent=100,
             language="fr",
             availability_template=_weekday_template(workdays=4),
         ),
@@ -411,8 +411,8 @@ def _build_resources() -> list[Resource]:
         Resource(
             name="Olivier Rey",
             role=ResourceRole.RELIEF_COOK,
-            contract_hours_per_month=80,
-            availability_percent=50,
+            contract_hours_per_month=160,
+            availability_percent=100,
             language="fr",
             preferred_shift_codes=[4, 10],
             availability_template=_weekday_template(workdays=3, weekend=True),
@@ -459,12 +459,6 @@ def _generate_absence_pairs(year: int) -> list[tuple[str, date, date]]:
     ]
 
 
-def main() -> None:
-    asyncio.run(seed())
-
-
-if __name__ == "__main__":
-    main()
 def _map_availability_template(template: Any) -> list[AvailabilityWindow]:
     if not template:
         return []
@@ -484,3 +478,11 @@ def _map_availability_template(template: Any) -> list[AvailabilityWindow]:
             )
         )
     return windows
+
+
+def main() -> None:
+    asyncio.run(seed())
+
+
+if __name__ == "__main__":
+    main()

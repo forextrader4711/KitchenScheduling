@@ -22,6 +22,9 @@ from kitchen_scheduler.services.scheduler import (
     _role_rule_key,
     evaluate_rule_violations,
     PRIME_SHIFT_BASE,
+    apply_prime_shift_relaxation,
+    daily_staff_target,
+    MONTHLY_OVERRUN_TOLERANCE,
 )
 
 HOURS_SCALE = 4  # quarter-hour precision
@@ -36,6 +39,7 @@ class OptimizerConfig:
     late_hours_threshold: int = 46  # hours per ISO week before penalties
     late_hours_penalty: int = 10
     prime_optional_penalty: int = 20
+    linear_staff_penalty: int = 25
 
 
 def _scaled(hours: float) -> int:
@@ -131,6 +135,8 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
     shift_rules = context.rules.rules.shift_rules
     working_rules = context.rules.rules.working_time
 
+    linear_target = daily_staff_target(context)
+
     for day_index, _day in enumerate(month_days):
         day_work_vars: List[cp_model.IntVar] = []
         role_work_vars: Dict[str, List[cp_model.IntVar]] = defaultdict(list)
@@ -154,6 +160,11 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
         total_staff = model.NewIntVar(0, len(context.resources), f"total_day_{day_index}")
         model.Add(total_staff == sum(day_work_vars))
         model.Add(total_staff >= shift_rules.minimum_daily_staff)
+        if linear_target > 0:
+            deviation = model.NewIntVar(0, len(context.resources), f"staff_dev_{day_index}")
+            model.Add(deviation >= total_staff - linear_target)
+            model.Add(deviation >= linear_target - total_staff)
+            objective_terms.append(deviation * config.linear_staff_penalty)
 
         for role_key, variables in role_work_vars.items():
             total_role = model.NewIntVar(0, len(variables), f"role_{role_key}_day_{day_index}")
@@ -229,7 +240,7 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
         # Monthly hour deviation (soft objective)
         if resource.target_hours is not None:
             target_units = _scaled(resource.target_hours)
-            tolerance_units = _scaled(12.0)
+            tolerance_units = _scaled(MONTHLY_OVERRUN_TOLERANCE)
             lower_bound = target_units - tolerance_units if target_units > tolerance_units else 0
             model.Add(total_hours <= target_units + tolerance_units)
             model.Add(total_hours >= lower_bound)
@@ -318,5 +329,6 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
             )
             entry_id += 1
 
+    apply_prime_shift_relaxation(context, entries)
     violations = evaluate_rule_violations(context, entries)
     return SchedulingResult(entries=entries, violations=violations)
