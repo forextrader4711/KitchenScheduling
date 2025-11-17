@@ -29,6 +29,7 @@ from kitchen_scheduler.services.scheduler import (
 )
 
 HOURS_SCALE = 4  # quarter-hour precision
+AVERAGE_SHIFT_HOURS = 8.3
 
 
 @dataclass
@@ -59,7 +60,11 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
     month_days = list(_iter_month_days(year, month_number))
     start = perf_counter()
 
-    def _empty_result(reason: str, violations: list[SchedulingViolation] | None = None) -> SchedulingResult:
+    def _empty_result(
+        reason: str,
+        violations: list[SchedulingViolation] | None = None,
+        diagnostics: dict[str, list[dict[str, int | str]]] | None = None,
+    ) -> SchedulingResult:
         duration_ms = int((perf_counter() - start) * 1000)
         return SchedulingResult(
             entries=[],
@@ -67,7 +72,7 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
             engine="optimizer",
             status="error",
             duration_ms=duration_ms,
-            meta={"reason": reason, "solver_status": "NOT_RUN"},
+            meta={"reason": reason, "solver_status": "NOT_RUN", "diagnostics": diagnostics},
         )
 
     if not month_days or not context.resources or not context.shifts:
@@ -330,7 +335,7 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
     solver_status_name = solver.StatusName(status)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        message, meta = _describe_infeasibility(context, month_days)
+        message, diag = _describe_infeasibility(context, month_days)
         return SchedulingResult(
             entries=[],
             violations=[
@@ -339,13 +344,13 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
                     message=message,
                     severity="critical",
                     scope="schedule",
-                    meta={"shortfalls": meta} if meta else None,
+                    meta={"diagnostics": diag} if diag else None,
                 )
             ],
             engine="optimizer",
             status="error",
             duration_ms=duration_ms,
-            meta={"failure_reason": message, "solver_status": solver_status_name, "details": meta},
+            meta={"failure_reason": message, "solver_status": solver_status_name, "diagnostics": diag},
         )
 
     entries: List[PlanningEntryRead] = []
@@ -529,17 +534,28 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
     )
 
 
-def _describe_infeasibility(context: SchedulingContext, month_days: list[date]) -> tuple[str, dict[str, list[str]] | None]:
+def _describe_infeasibility(
+    context: SchedulingContext, month_days: list[date]
+) -> tuple[str, dict[str, list[dict[str, int | float | str]]]] | None:
     shift_rules = context.rules.rules.shift_rules
-    shortfalls: dict[str, set[str]] = defaultdict(set)
+    staffing_shortfalls: list[dict[str, int | str]] = []
+    role_shortfalls: list[dict[str, int | str]] = []
+    capacity_shortfalls: list[dict[str, int | float | str]] = []
 
     for day in month_days:
         available_resources = [
             resource for resource in context.resources if _resource_available_on_day(resource, day)
         ]
         total_available = len(available_resources)
-        if total_available < (shift_rules.minimum_daily_staff or 0):
-            shortfalls[day.isoformat()].add("staffing")
+        required_staff = shift_rules.minimum_daily_staff or 0
+        if total_available < required_staff:
+            staffing_shortfalls.append(
+                {
+                    "date": day.isoformat(),
+                    "required": required_staff,
+                    "available": total_available,
+                }
+            )
 
         role_counts: dict[str, int] = defaultdict(int)
         for resource in available_resources:
@@ -547,12 +563,53 @@ def _describe_infeasibility(context: SchedulingContext, month_days: list[date]) 
 
         for role_key, composition in shift_rules.composition.items():
             if composition and composition.min is not None and composition.min > 0:
-                if role_counts.get(role_key, 0) < composition.min:
-                    shortfalls[day.isoformat()].add(role_key)
+                available_role = role_counts.get(role_key, 0)
+                if available_role < composition.min:
+                    role_shortfalls.append(
+                        {
+                            "date": day.isoformat(),
+                            "role": role_key,
+                            "required": composition.min,
+                            "available": available_role,
+                        }
+                    )
 
-    if not shortfalls:
+    for resource in context.resources:
+        target_hours = resource.target_hours
+        if not target_hours or target_hours <= 0:
+            continue
+        available_hours = 0.0
+        for day in month_days:
+            if not _resource_available_on_day(resource, day):
+                continue
+            absence = _get_absence(resource, day)
+            if absence:
+                continue
+            available_hours += AVERAGE_SHIFT_HOURS
+        if available_hours + 1e-6 < target_hours:
+            capacity_shortfalls.append(
+                {
+                    "resource_id": resource.id,
+                    "resource_name": getattr(resource, "name", None),
+                    "required_hours": float(target_hours),
+                    "available_hours": round(available_hours, 2),
+                }
+            )
+
+    if not staffing_shortfalls and not role_shortfalls and not capacity_shortfalls:
         return "Optimizer could not find a feasible schedule.", None
 
-    segments = [f"{day}: {', '.join(sorted(labels))}" for day, labels in sorted(shortfalls.items())]
-    message = "Optimizer could not find a feasible schedule; insufficient available resources for " + "; ".join(segments)
-    return message, {day: sorted(labels) for day, labels in shortfalls.items()}
+    messages: list[str] = []
+    if staffing_shortfalls:
+        messages.append("daily staffing minimums")
+    if role_shortfalls:
+        messages.append("role composition minimums")
+    if capacity_shortfalls:
+        messages.append("resource monthly capacity")
+    message = "Optimizer could not find a feasible schedule; insufficient " + " and ".join(messages)
+    diagnostics = {
+        "staffing": staffing_shortfalls,
+        "roles": role_shortfalls,
+        "capacity": capacity_shortfalls,
+    }
+    return message, diagnostics

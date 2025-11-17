@@ -1,5 +1,6 @@
 import { SyntheticEvent, useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   AppBar,
   Box,
   Button,
@@ -13,6 +14,7 @@ import {
   Fade,
   Grid,
   IconButton,
+  Snackbar,
   Stack,
   Tab,
   Tabs,
@@ -30,6 +32,7 @@ import ViolationsPanel from "./components/ViolationsPanel";
 import PlanningInsightsPanel from "./components/PlanningInsightsPanel";
 import PlanVersionHistory from "./components/PlanVersionHistory";
 import PlanSuggestionsPanel from "./components/PlanSuggestionsPanel";
+import DiagnosticsPanel from "./components/DiagnosticsPanel";
 import useScheduleStore from "./state/scheduleStore";
 
 const App = () => {
@@ -43,12 +46,18 @@ const App = () => {
     plans,
     activePhase,
     setActivePhase,
-    isLoading
+    isLoading,
+    generationDiagnostics
   } = useScheduleStore();
   const [tab, setTab] = useState<"planning" | "masterData">("planning");
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false);
   const [versionLabel, setVersionLabel] = useState("");
   const [generateMode, setGenerateMode] = useState<"heuristic" | "optimized">("heuristic");
+  const [toast, setToast] = useState<{
+    open: boolean;
+    message: string;
+    severity: "success" | "info" | "warning" | "error";
+  }>({ open: false, message: "", severity: "info" });
 
   useEffect(() => {
     void loadInitialData();
@@ -80,6 +89,7 @@ const App = () => {
 
   const preparationViolations = plans.preparation?.violations.length ?? 0;
   const approvedPlan = plans.approved;
+  const diagnosticsAvailable = Boolean(generationDiagnostics);
   const statusChip: { color: ChipProps["color"]; label: string } =
     activePhase === "preparation"
       ? {
@@ -114,24 +124,7 @@ const App = () => {
           defaultValue: "No approved plan stored yet."
         });
 
-  const primaryActionLabel =
-    activePhase === "preparation"
-      ? t("planning.generateAndSaveButton", { defaultValue: "Generate compliant plan" })
-      : t("planning.refreshButton", { defaultValue: "Refresh data" });
-
-  const handlePrimaryAction = () => {
-    if (activePhase === "preparation") {
-      setGenerateMode("heuristic");
-      const now = new Date();
-      const formatted = now.toISOString().slice(0, 16).replace("T", " ");
-      setVersionLabel(`Auto ${formatted}`);
-      setGenerateDialogOpen(true);
-    } else {
-      void loadInitialData();
-    }
-  };
-
-  const handleOptimizedAction = () => {
+  const handleGenerateClick = () => {
     setGenerateMode("optimized");
     const now = new Date();
     const formatted = now.toISOString().slice(0, 16).replace("T", " ");
@@ -139,11 +132,40 @@ const App = () => {
     setGenerateDialogOpen(true);
   };
 
+  const handleToastClose = () => {
+    setToast((prev) => ({ ...prev, open: false }));
+  };
+
   const handleGenerateConfirm = async () => {
-    if (generateMode === "optimized") {
-      await generateOptimisedPlan(versionLabel.trim() || undefined);
-    } else {
-      await refreshPreparationPlan(versionLabel.trim() || undefined);
+    const result = await generateOptimisedPlan(versionLabel.trim() || undefined);
+    if (result?.status === "fallback") {
+      setToast({
+        open: true,
+        message:
+          result.message ??
+          t("planning.optimizerFallbackMessage", {
+            defaultValue: "Optimization interrupted. Returned fallback plan."
+          }),
+        severity: "warning"
+      });
+    } else if (result?.status === "success") {
+      setToast({
+        open: true,
+        message: t("planning.optimizerSuccessMessage", {
+          defaultValue: "Optimized plan created."
+        }),
+        severity: "success"
+      });
+    } else if (result?.status === "error") {
+      setToast({
+        open: true,
+        message:
+          result.message ??
+          t("planning.optimizerErrorMessage", {
+            defaultValue: "Unable to generate optimized plan."
+          }),
+        severity: "error"
+      });
     }
     setGenerateDialogOpen(false);
   };
@@ -202,15 +224,29 @@ const App = () => {
             />
             <Chip color={statusChip.color} label={statusChip.label} />
             {activePhase === "preparation" ? (
-              <Button variant="outlined" disabled={isLoading} onClick={handleOptimizedAction}>
-                {t("planning.generateOptimizedButton", { defaultValue: "Generate optimized plan" })}
+              <Button variant="contained" disabled={isLoading} onClick={handleGenerateClick}>
+                {t("planning.generateOptimizedButton", { defaultValue: "Generate plan" })}
               </Button>
-            ) : null}
-            <Button variant="contained" disabled={isLoading} onClick={handlePrimaryAction}>
-              {primaryActionLabel}
-            </Button>
+            ) : (
+              <Button variant="contained" disabled={isLoading} onClick={() => void loadInitialData()}>
+                {t("planning.refreshButton", { defaultValue: "Refresh data" })}
+              </Button>
+            )}
           </Stack>
         </Box>
+
+        {diagnosticsAvailable ? (
+          <Alert severity="warning" sx={{ mb: 3 }}>
+            {t("planning.diagnostics.alert", {
+              defaultValue: "Optimizer paused: {{summary}}",
+              summary:
+                generationDiagnostics?.summary ||
+                t("planning.diagnostics.summaryFallback", {
+                  defaultValue: "Review diagnostics and choose how to proceed."
+                })
+            })}
+          </Alert>
+        ) : null}
 
         <Tabs
           value={tab}
@@ -252,6 +288,11 @@ const App = () => {
                 {activePhase === "preparation" ? (
                   <Grid item xs={12} md={6} xl={3}>
                     <PlanSuggestionsPanel />
+                  </Grid>
+                ) : null}
+                {activePhase === "preparation" && diagnosticsAvailable ? (
+                  <Grid item xs={12} md={6} xl={3}>
+                    <DiagnosticsPanel />
                   </Grid>
                 ) : null}
                 <Grid item xs={12} md={6} xl={3}>
@@ -333,6 +374,16 @@ const App = () => {
           </Button>
         </DialogActions>
       </Dialog>
+      <Snackbar
+        open={toast.open}
+        autoHideDuration={4000}
+        onClose={handleToastClose}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+      >
+        <Alert onClose={handleToastClose} severity={toast.severity} variant="filled" sx={{ borderRadius: 2 }}>
+          {toast.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

@@ -86,7 +86,43 @@ type PlanGenerationResponseDto = {
   status?: "success" | "fallback" | "error";
   engine?: "optimizer" | "heuristic" | "manual";
   duration_ms?: number | null;
+  diagnostics?: PlanGenerationDiagnosticsDto | null;
   metadata?: Record<string, unknown>;
+};
+
+type StaffingDiagnosticDto = {
+  date: string;
+  required: number;
+  available: number;
+};
+
+type RoleDiagnosticDto = {
+  date: string;
+  role: string;
+  required: number;
+  available: number;
+};
+
+type PlanGenerationDiagnosticsDto = {
+  summary?: string | null;
+  staffing?: StaffingDiagnosticDto[];
+  roles?: RoleDiagnosticDto[];
+  capacity?: ResourceCapacityDiagnosticDto[];
+};
+
+type PlanGenerationRelaxationsDto = {
+  minimum_daily_staff_delta?: number;
+  role_minimum_deltas?: Record<string, number>;
+  max_hours_per_week_delta?: number;
+  max_working_days_per_week_delta?: number;
+  max_consecutive_working_days_delta?: number;
+};
+
+type ResourceCapacityDiagnosticDto = {
+  resource_id: number;
+  resource_name?: string | null;
+  required_hours: number;
+  available_hours: number;
 };
 
 type PlanOverviewDto = {
@@ -223,10 +259,15 @@ interface ScheduleState {
   plans: Record<PlanPhaseKey, PlanPhaseState | null>;
   activePhase: PlanPhaseKey;
   holidays: string[];
+  generationDiagnostics: PlanGenerationDiagnosticsDto | null;
   setActivePhase: (phase: PlanPhaseKey) => void;
   loadInitialData: () => Promise<void>;
   refreshPreparationPlan: (label?: string) => Promise<void>;
-  generateOptimisedPlan: (label?: string) => Promise<GenerationResult>;
+  generateOptimisedPlan: (
+    label?: string,
+    relaxations?: PlanGenerationRelaxationsDto
+  ) => Promise<GenerationResult>;
+  generateHeuristicPlan: (label?: string) => Promise<GenerationResult>;
   refreshOverviewOnly: () => Promise<void>;
 }
 
@@ -564,6 +605,7 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
   },
   activePhase: "preparation",
   holidays: [],
+  generationDiagnostics: null,
   setActivePhase: (phase) =>
     set((state) => {
       if (phase === "approved" && !state.plans.approved) {
@@ -644,6 +686,7 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
         },
         activePhase: preparationPlan ? "preparation" : approvedPlan ? "approved" : "preparation",
         holidays: overview.holidays ?? [],
+        generationDiagnostics: null,
         isLoading: false
       });
     } catch (error) {
@@ -666,30 +709,27 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
         },
         activePhase: "preparation",
         holidays: [],
+        generationDiagnostics: null,
         isLoading: false
       });
     }
   },
   refreshPreparationPlan: async (label?: string) => {
-    const month = get().month ?? new Date().toISOString().slice(0, 7);
-    set({ isLoading: true });
-    try {
-      await api.post("/planning/generate/optimized", { month, label });
-      await get().refreshOverviewOnly();
-    } catch (error) {
-      console.warn("Failed to refresh preparation plan.", error);
-      set({ isLoading: false });
-    }
+    await get().generateOptimisedPlan(label);
   },
-  generateOptimisedPlan: async (label?: string) => {
+  generateOptimisedPlan: async (
+    label?: string,
+    relaxations?: PlanGenerationRelaxationsDto
+  ) => {
     const month = get().month ?? new Date().toISOString().slice(0, 7);
     set({ isLoading: true });
     try {
       const response = await api.post<PlanGenerationResponseDto>("/planning/generate/optimized", {
         month,
-        label
+        label,
+        relaxations
       });
-      await get().refreshOverviewOnly();
+      const hasEntries = response.data.entries && response.data.entries.length > 0;
       const metadata = response.data.metadata as
         | {
             fallback_reason?: unknown;
@@ -704,32 +744,44 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
         metadata && typeof metadata.failure_reason === "string"
           ? (metadata.failure_reason as string)
           : undefined;
+      const diagnosticSummary = response.data.diagnostics?.summary || undefined;
       const fallbackViolation = response.data.violations?.find((violation) =>
         ["optimizer-infeasible", "optimizer-failed", "optimizer-fallback"].includes(violation.code)
       );
       const normalizedStatus =
-        response.data.status ?? (fallbackViolation ? "fallback" : "success");
-      if (normalizedStatus === "fallback") {
-        return {
-          status: "fallback",
-          message:
-            fallbackReason ||
-            fallbackViolation?.message ||
-            "Optimization interrupted. Returned a compliant fallback plan."
-        };
+        response.data.status ?? (hasEntries ? "success" : "error");
+      if (hasEntries) {
+        await get().refreshOverviewOnly();
+        set({ generationDiagnostics: null });
+        return { status: normalizedStatus };
       }
-      if (normalizedStatus === "error") {
-        return {
-          status: "error",
-          message:
-            failureReason ||
-            fallbackViolation?.message ||
-            "Unable to generate optimized plan."
-        };
-      }
-      return { status: "success" };
+      set({
+        isLoading: false,
+        generationDiagnostics: response.data.diagnostics ?? null
+      });
+      const message =
+        diagnosticSummary ||
+        fallbackReason ||
+        failureReason ||
+        fallbackViolation?.message ||
+        "Optimizer could not find a feasible schedule.";
+      return { status: normalizedStatus, message };
     } catch (error) {
       console.warn("Failed to generate optimized plan.", error);
+      set({ isLoading: false });
+      return { status: "error", message: formatErrorMessage(error) };
+    }
+  },
+  generateHeuristicPlan: async (label?: string) => {
+    const month = get().month ?? new Date().toISOString().slice(0, 7);
+    set({ isLoading: true });
+    try {
+      await api.post("/planning/generate", { month, label });
+      await get().refreshOverviewOnly();
+      set({ generationDiagnostics: null });
+      return { status: "success" };
+    } catch (error) {
+      console.warn("Failed to generate heuristic plan.", error);
       set({ isLoading: false });
       return { status: "error", message: formatErrorMessage(error) };
     }

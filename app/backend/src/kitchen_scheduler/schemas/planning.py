@@ -30,9 +30,20 @@ class PlanScenarioUpdate(BaseModel):
     status: str | None = None
 
 
+class PlanGenerationRelaxations(BaseModel):
+    """Optional relaxations planners can request when generating a plan."""
+
+    minimum_daily_staff_delta: int | None = None
+    role_minimum_deltas: dict[str, int] | None = None
+    max_hours_per_week_delta: int | None = None
+    max_working_days_per_week_delta: int | None = None
+    max_consecutive_working_days_delta: int | None = None
+
+
 class PlanGenerationRequest(BaseModel):
     month: str
     label: str | None = None
+    relaxations: PlanGenerationRelaxations | None = None
 
 
 class PlanViolation(BaseModel):
@@ -46,12 +57,40 @@ class PlanViolation(BaseModel):
     iso_week: str | None = None
 
 
+class StaffingShortfallDiagnostic(BaseModel):
+    date: str
+    required: int
+    available: int
+
+
+class RoleShortfallDiagnostic(BaseModel):
+    date: str
+    role: str
+    required: int
+    available: int
+
+
+class ResourceCapacityDiagnostic(BaseModel):
+    resource_id: int
+    resource_name: str | None = None
+    required_hours: float
+    available_hours: float
+
+
+class PlanGenerationDiagnostics(BaseModel):
+    summary: str | None = None
+    staffing: list[StaffingShortfallDiagnostic] = Field(default_factory=list)
+    roles: list[RoleShortfallDiagnostic] = Field(default_factory=list)
+    capacity: list[ResourceCapacityDiagnostic] = Field(default_factory=list)
+
+
 class PlanGenerationResponse(BaseModel):
     entries: List[PlanningEntryRead]
     violations: List[PlanViolation] = Field(default_factory=list)
     engine: Literal["optimizer", "heuristic", "manual"] = "heuristic"
     status: Literal["success", "fallback", "error"] = "success"
     duration_ms: int | None = None
+    diagnostics: PlanGenerationDiagnostics | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

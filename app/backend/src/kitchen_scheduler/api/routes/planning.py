@@ -14,8 +14,13 @@ from kitchen_scheduler.repositories import resource as resource_repo
 from kitchen_scheduler.repositories import shift as shift_repo
 from kitchen_scheduler.repositories import system as system_repo
 from kitchen_scheduler.schemas.planning import (
+    PlanGenerationDiagnostics,
+    PlanGenerationRelaxations,
     PlanGenerationRequest,
     PlanGenerationResponse,
+    ResourceCapacityDiagnostic,
+    RoleShortfallDiagnostic,
+    StaffingShortfallDiagnostic,
     PlanInsightItem,
     PlanInsights,
     PlanOverviewResponse,
@@ -99,6 +104,153 @@ _RULE_STATUS_DEFINITIONS = [
         "violation_codes": {"role-max-exceeded"},
     },
 ]
+
+
+def _clone_rules(rule_set: RuleSet) -> RuleSet:
+    """Return a deep copy of the incoming rule set so we can mutate safely."""
+
+    return RuleSet(rules=SchedulingRules.model_validate(rule_set.rules.model_dump()))
+
+
+def _apply_relaxations(
+    rule_set: RuleSet, relaxations: PlanGenerationRelaxations | None
+) -> tuple[RuleSet, dict[str, Any]]:
+    if not relaxations:
+        return rule_set, {}
+
+    rules = _clone_rules(rule_set).rules
+    applied: dict[str, Any] = {}
+
+    if relaxations.minimum_daily_staff_delta is not None:
+        original = rules.shift_rules.minimum_daily_staff
+        adjusted = max(0, original + relaxations.minimum_daily_staff_delta)
+        rules.shift_rules.minimum_daily_staff = adjusted
+        applied["minimum_daily_staff"] = {"original": original, "adjusted": adjusted}
+
+    if relaxations.role_minimum_deltas:
+        role_changes: dict[str, dict[str, int]] = {}
+        for role_key, delta in relaxations.role_minimum_deltas.items():
+            comp = rules.shift_rules.composition.get(role_key)
+            if not comp or delta == 0:
+                continue
+            original = comp.min or 0
+            adjusted = max(0, original + delta)
+            comp.min = adjusted
+            role_changes[role_key] = {"original": original, "adjusted": adjusted}
+        if role_changes:
+            applied["role_minimums"] = role_changes
+
+    working = rules.working_time
+    if relaxations.max_hours_per_week_delta is not None:
+        original = working.max_hours_per_week
+        adjusted = max(working.max_hours_per_week + relaxations.max_hours_per_week_delta, 0)
+        working.max_hours_per_week = adjusted
+        applied.setdefault("working_time", {})["max_hours_per_week"] = {
+            "original": original,
+            "adjusted": adjusted,
+        }
+    if relaxations.max_working_days_per_week_delta is not None:
+        original = working.max_working_days_per_week
+        adjusted = max(0, working.max_working_days_per_week + relaxations.max_working_days_per_week_delta)
+        working.max_working_days_per_week = adjusted
+        applied.setdefault("working_time", {})["max_working_days_per_week"] = {
+            "original": original,
+            "adjusted": adjusted,
+        }
+    if relaxations.max_consecutive_working_days_delta is not None:
+        original = working.max_consecutive_working_days
+        adjusted = max(0, working.max_consecutive_working_days + relaxations.max_consecutive_working_days_delta)
+        working.max_consecutive_working_days = adjusted
+        applied.setdefault("working_time", {})["max_consecutive_working_days"] = {
+            "original": original,
+            "adjusted": adjusted,
+        }
+
+    return RuleSet(rules=rules), applied
+
+
+def _build_diagnostics(meta: dict[str, Any]) -> PlanGenerationDiagnostics | None:
+    raw = meta.get("diagnostics") if meta else None
+    if not raw:
+        return None
+
+    staffing_items: list[StaffingShortfallDiagnostic] = []
+    for item in raw.get("staffing", []):
+        try:
+            staffing_items.append(
+                StaffingShortfallDiagnostic(
+                    date=str(item.get("date")),
+                    required=int(item.get("required", 0)),
+                    available=int(item.get("available", 0)),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+
+    role_items: list[RoleShortfallDiagnostic] = []
+    for item in raw.get("roles", []):
+        try:
+            role_items.append(
+                RoleShortfallDiagnostic(
+                    date=str(item.get("date")),
+                    role=str(item.get("role")),
+                    required=int(item.get("required", 0)),
+                    available=int(item.get("available", 0)),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+
+    capacity_items: list[ResourceCapacityDiagnostic] = []
+    for item in raw.get("capacity", []):
+        try:
+            capacity_items.append(
+                ResourceCapacityDiagnostic(
+                    resource_id=int(item.get("resource_id")),
+                    resource_name=item.get("resource_name"),
+                    required_hours=float(item.get("required_hours", 0.0)),
+                    available_hours=float(item.get("available_hours", 0.0)),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+
+    summary = meta.get("failure_reason") or meta.get("reason")
+    if not staffing_items and not role_items and not capacity_items:
+        return PlanGenerationDiagnostics(summary=summary)
+    return PlanGenerationDiagnostics(
+        summary=summary, staffing=staffing_items, roles=role_items, capacity=capacity_items
+    )
+
+
+def _derive_diagnostics_from_violations(violations: list[PlanViolation]) -> PlanGenerationDiagnostics | None:
+    staffing_items: list[StaffingShortfallDiagnostic] = []
+    role_items: list[RoleShortfallDiagnostic] = []
+
+    for violation in violations:
+        if violation.code == "staffing-shortfall" and violation.meta:
+            date = violation.meta.get("date") or violation.day or ""
+            assignments = int(violation.meta.get("assigned", 0))
+            required = int(violation.meta.get("required", 0))
+            staffing_items.append(
+                StaffingShortfallDiagnostic(date=str(date), required=required, available=assignments)
+            )
+        elif violation.code == "role-min-shortfall" and violation.meta:
+            date = violation.meta.get("date") or violation.day or ""
+            role = violation.meta.get("role") or "role"
+            assigned = int(violation.meta.get("assigned", 0))
+            required = int(violation.meta.get("required", 0))
+            role_items.append(
+                RoleShortfallDiagnostic(date=str(date), role=str(role), required=required, available=assigned)
+            )
+
+    if not staffing_items and not role_items:
+        return None
+    return PlanGenerationDiagnostics(
+        summary="Derived from heuristic violations",
+        staffing=staffing_items,
+        roles=role_items,
+    )
 
 
 def _month_bounds(month: str) -> tuple[date, date]:
@@ -274,7 +426,7 @@ def _map_violation(v):
         code=v.code,
         message=v.message,
         severity=v.severity,
-        meta=v.meta,
+        meta=v.meta or {},
         scope=v.scope,
         day=day_value,
         resource_id=v.resource_id,
@@ -287,7 +439,8 @@ async def _run_generation(
     month: str,
     *,
     label: str | None = None,
-    mode: Literal["auto", "optimizer", "heuristic"] = "auto",
+    mode: Literal["optimizer", "heuristic"] = "optimizer",
+    relaxations: PlanGenerationRelaxations | None = None,
 ) -> PlanGenerationResponse:
     resources = await resource_repo.list_resources(session)
     shifts = await shift_repo.list_shifts(session)
@@ -299,6 +452,8 @@ async def _run_generation(
         rule_set = RuleSet(rules=SchedulingRules.model_validate(config.rules))
     else:
         rule_set = load_default_rules()
+
+    rule_set, applied_relaxations = _apply_relaxations(rule_set, relaxations)
 
     scheduling_resources = []
     for resource in resources:
@@ -352,59 +507,75 @@ async def _run_generation(
         }
         if attempt.meta:
             attempt_meta["meta"] = attempt.meta
+            if attempt.meta.get("diagnostics"):
+                attempt_meta["diagnostics"] = attempt.meta.get("diagnostics")
         attempts.append(attempt_meta)
 
-    result: SchedulingResult | None = None
-    fallback_reason: str | None = None
-    prefer_optimizer = mode in {"auto", "optimizer"}
+    result: SchedulingResult
 
-    if prefer_optimizer:
+    if mode == "optimizer":
         optimized = generate_optimised_schedule(context)
         _record_attempt(optimized)
-        if optimized.status == "success" and optimized.entries:
-            result = optimized
-        else:
-            fallback_reason = (
-                optimized.meta.get("failure_reason")
-                or optimized.meta.get("reason")
-                or optimized.meta.get("solver_status")
-                or "optimizer_failed"
+        if not optimized.entries:
+            result_meta = dict(optimized.meta)
+            result_meta["attempts"] = attempts
+            result_meta["mode"] = mode
+            if applied_relaxations:
+                result_meta["relaxations_applied"] = applied_relaxations
+            if relaxations:
+                result_meta["relaxations_requested"] = relaxations.model_dump(exclude_none=True)
+
+            violations = [_map_violation(v) for v in optimized.violations]
+            diagnostics = _build_diagnostics(result_meta)
+            if diagnostics is None:
+                diagnostics = _derive_diagnostics_from_violations(violations)
+            if diagnostics is None:
+                diagnostics = PlanGenerationDiagnostics(
+                    summary=result_meta.get("failure_reason") or result_meta.get("reason") or "Optimizer stopped"
+                )
+            result_meta["diagnostics"] = diagnostics.model_dump()
+
+            return PlanGenerationResponse(
+                entries=[],
+                violations=violations,
+                engine=optimized.engine,
+                status="error",
+                duration_ms=optimized.duration_ms,
+                diagnostics=diagnostics,
+                metadata=result_meta,
             )
 
-    if result is None:
+        result = optimized
+
+    else:  # heuristic
         heuristic = generate_rule_compliant_schedule(context)
-        # If we specifically asked for heuristic mode, keep status as-is.
-        if fallback_reason:
-            heuristic.status = "fallback" if heuristic.entries else "error"
-            heuristic.meta["fallback_reason"] = fallback_reason
-            heuristic.violations.append(
-                SchedulingViolation(
-                    code="optimizer-fallback",
-                    message=(
-                        "Optimizer unavailable "
-                        f"(reason: {fallback_reason}). Returned heuristic schedule."
-                    ),
-                    severity="warning",
-                    scope="schedule",
-                    meta={"reason": fallback_reason},
-                )
-            )
-        else:
-            heuristic.meta.setdefault("reason", "heuristic_requested" if mode == "heuristic" else "heuristic_run")
         _record_attempt(heuristic)
         result = heuristic
 
     result_meta = dict(result.meta)
     result_meta["attempts"] = attempts
     result_meta["mode"] = mode
+    if applied_relaxations:
+        result_meta["relaxations_applied"] = applied_relaxations
+    if relaxations:
+        result_meta["relaxations_requested"] = relaxations.model_dump(exclude_none=True)
 
     violations = [_map_violation(v) for v in result.violations]
+    diagnostics = _build_diagnostics(result_meta)
+    if diagnostics is None:
+        diagnostics = _derive_diagnostics_from_violations(violations)
+    if diagnostics is None:
+        diagnostics = PlanGenerationDiagnostics(
+            summary=result_meta.get("failure_reason") or result_meta.get("reason") or "Optimizer stopped"
+        )
+    result_meta["diagnostics"] = diagnostics.model_dump()
     response = PlanGenerationResponse(
         entries=result.entries,
         violations=violations,
         engine=result.engine,
         status=result.status,
         duration_ms=result.duration_ms,
+        diagnostics=diagnostics,
         metadata=result_meta,
     )
 
@@ -453,7 +624,13 @@ async def generate_plan(
     payload: PlanGenerationRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> PlanGenerationResponse:
-    return await _run_generation(session, payload.month, label=payload.label)
+    return await _run_generation(
+        session,
+        payload.month,
+        label=payload.label,
+        mode="heuristic",
+        relaxations=payload.relaxations,
+    )
 
 
 @router.post("/generate/optimized", response_model=PlanGenerationResponse)
@@ -461,7 +638,13 @@ async def generate_optimized_plan(
     payload: PlanGenerationRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> PlanGenerationResponse:
-    return await _run_generation(session, payload.month, label=payload.label)
+    return await _run_generation(
+        session,
+        payload.month,
+        label=payload.label,
+        mode="optimizer",
+        relaxations=payload.relaxations,
+    )
 
 
 @router.post("/scenarios/{scenario_id}/generate", response_model=PlanGenerationResponse)
@@ -472,7 +655,7 @@ async def generate_plan_for_scenario(
     scenario = await planning_repo.get_scenario(session, scenario_id)
     if not scenario:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scenario not found")
-    return await _run_generation(session, scenario.month)
+    return await _run_generation(session, scenario.month, mode="heuristic")
 
 
 @router.get("/overview", response_model=PlanOverviewResponse)
@@ -1057,6 +1240,7 @@ async def apply_suggestion_to_scenario(
         violations=violations,
         engine="manual",
         status="success",
+        diagnostics=None,
         metadata={"reason": "applied_suggestion"},
     )
     await planning_repo.store_plan_generation(session, scenario, response, version_label=payload.label)

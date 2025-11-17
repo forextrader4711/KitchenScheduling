@@ -8,6 +8,7 @@
   "planning": {
     "gridTitle": "Planning mensuel pour {{month}}",
     "resource": "Ressource",
+    "availabilityColumn": "Disponibilité",
     "role": "Rôle",
     "resourcePlural": "Ressources",
     "tabLabel": "Planning",
@@ -43,6 +44,9 @@
     "generateButton": "Régénérer le brouillon",
     "generateAndSaveButton": "Générer un planning conforme",
     "generateOptimizedButton": "Générer un planning optimisé",
+    "optimizerFallbackMessage": "Optimisation interrompue. Plan de secours généré.",
+    "optimizerErrorMessage": "Impossible de générer le plan optimisé.",
+    "optimizerSuccessMessage": "Plan optimisé créé.",
     "approvedReady": "Planning approuvé disponible",
     "noApprovedPlan": "En attente d'approbation",
     "insightsTitle": "Synthèse des statuts",
@@ -89,6 +93,24 @@
       "optimizedTitle": "Générer un planning optimisé",
       "optimizedDescription": "Utilisez le solveur d'optimisation pour respecter toutes les règles et équilibrer automatiquement les heures.",
       "optimizedConfirm": "Lancer l'optimisation"
+    },
+    "diagnostics": {
+      "title": "Optimizer diagnostics",
+      "summaryFallback": "Latest solver issues requiring attention.",
+      "alert": "Optimizer paused: {{summary}}",
+      "staffing": "Daily staffing shortfalls",
+      "staffingEntry": "{{date}}: {{available}} / {{required}} resources",
+      "roles": "Role composition gaps",
+      "roleEntry": "{{date}}: {{role}} available {{available}} / {{required}} required",
+      "capacity": "Resource capacity conflicts",
+      "capacityEntry": "{{resource}} available {{available}}h / {{required}}h required by contract",
+      "retryButton": "Retry optimizer with relaxations",
+      "heuristicButton": "Use heuristic fallback",
+      "relaxationsHint": "Retry lowers staffing and role minimums highlighted above.",
+      "noRelaxations": "Retry will use the current constraints. Adjust availability or relaxations if needed.",
+      "noDetails": "No specific constraint breakdown available.",
+      "relaxationStaffing": "Daily staffing minimum −{{delta}}",
+      "relaxationRole": "{{role}} minimum −{{delta}}"
     },
     "suggestions": {
       "title": "Propositions de corrections",

@@ -8,6 +8,7 @@
   "planning": {
     "gridTitle": "Monthly plan for {{month}}",
     "resource": "Resource",
+    "availabilityColumn": "Availability",
     "role": "Role",
     "resourcePlural": "Resources",
     "tabLabel": "Planning",
@@ -23,10 +24,10 @@
     },
     "absenceCodes": {
       "vacation": "VAC",
-      "sick_leave": "SICK",
+      "sick_leave": "SCK",
       "training": "TRN",
       "other": "OTH",
-      "rest_day": "REST"
+      "rest_day": "RST"
     },
     "unavailableCell": "Unavailable",
     "unavailableCellShort": "UNAV",
@@ -43,6 +44,9 @@
     "generateButton": "Regenerate draft",
     "generateAndSaveButton": "Generate compliant plan",
     "generateOptimizedButton": "Generate optimized plan",
+    "optimizerFallbackMessage": "Optimization interrupted. Returned fallback plan.",
+    "optimizerErrorMessage": "Unable to generate optimized plan.",
+    "optimizerSuccessMessage": "Optimized plan created.",
     "approvedReady": "Approved plan stored",
     "noApprovedPlan": "Awaiting approval",
     "insightsTitle": "Status breakdown",
@@ -89,6 +93,24 @@
       "optimizedTitle": "Generate optimized plan",
       "optimizedDescription": "Use the optimisation solver to satisfy all rules and balance hours automatically.",
       "optimizedConfirm": "Run optimiser"
+    },
+    "diagnostics": {
+      "title": "Optimizer diagnostics",
+      "summaryFallback": "Latest solver issues requiring attention.",
+      "alert": "Optimizer paused: {{summary}}",
+      "staffing": "Daily staffing shortfalls",
+      "staffingEntry": "{{date}}: {{available}} / {{required}} resources",
+      "roles": "Role composition gaps",
+      "roleEntry": "{{date}}: {{role}} available {{available}} / {{required}} required",
+      "capacity": "Resource capacity conflicts",
+      "capacityEntry": "{{resource}} available {{available}}h / {{required}}h required by contract",
+      "retryButton": "Retry optimizer with relaxations",
+      "heuristicButton": "Use heuristic fallback",
+      "relaxationsHint": "Retry lowers staffing and role minimums highlighted above.",
+      "noRelaxations": "Retry will use the current constraints. Adjust availability or relaxations if needed.",
+      "noDetails": "No specific constraint breakdown available.",
+      "relaxationStaffing": "Daily staffing minimum −{{delta}}",
+      "relaxationRole": "{{role}} minimum −{{delta}}"
     },
     "suggestions": {
       "title": "Suggested fixes",
