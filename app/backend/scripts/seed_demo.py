@@ -205,6 +205,10 @@ async def _generate_initial_plan(session, month: str) -> None:
             )
             for violation in result.violations
         ],
+        engine="heuristic",
+        status=result.status,
+        duration_ms=result.duration_ms,
+        metadata=result.meta,
     )
 
     scenario = await planning_repo.ensure_scenario(
@@ -423,21 +427,17 @@ def _build_resources() -> list[Resource]:
 
 
 def _weekday_template(*, workdays: int, weekend: bool = False) -> list[dict]:
-    """Create a simple availability template with optional weekend coverage."""
+    """Return a template where the resource is available every day."""
 
-    weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday"]
-    weekend_days = ["saturday", "sunday"] if weekend else []
-    active_days = list(islice(cycle(weekdays), workdays))
-    active_days += weekend_days
-
+    days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
     template = []
-    for day in weekdays + weekend_days:
+    for day in days:
         template.append(
             {
                 "day": day,
-                "is_available": day in active_days,
-                "start_time": "07:15" if day in active_days else None,
-                "end_time": "19:15" if day in active_days else None,
+                "is_available": True,
+                "start_time": "07:15",
+                "end_time": "19:15",
             }
         )
     return template

@@ -80,6 +80,15 @@ type PlanPhaseDto = {
   summaries?: PlanSummaryDto[];
 };
 
+type PlanGenerationResponseDto = {
+  entries: PlanningEntryDto[];
+  violations: PlanViolationDto[];
+  status?: "success" | "fallback" | "error";
+  engine?: "optimizer" | "heuristic" | "manual";
+  duration_ms?: number | null;
+  metadata?: Record<string, unknown>;
+};
+
 type PlanOverviewDto = {
   month: string;
   preparation?: PlanPhaseDto | null;
@@ -217,9 +226,14 @@ interface ScheduleState {
   setActivePhase: (phase: PlanPhaseKey) => void;
   loadInitialData: () => Promise<void>;
   refreshPreparationPlan: (label?: string) => Promise<void>;
-  generateOptimisedPlan: (label?: string) => Promise<void>;
+  generateOptimisedPlan: (label?: string) => Promise<GenerationResult>;
   refreshOverviewOnly: () => Promise<void>;
 }
+
+type GenerationResult = {
+  status: "success" | "fallback" | "error";
+  message?: string;
+};
 
 const fallbackResources: Resource[] = [
   {
@@ -660,7 +674,7 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
     const month = get().month ?? new Date().toISOString().slice(0, 7);
     set({ isLoading: true });
     try {
-      await api.post("/planning/generate", { month, label });
+      await api.post("/planning/generate/optimized", { month, label });
       await get().refreshOverviewOnly();
     } catch (error) {
       console.warn("Failed to refresh preparation plan.", error);
@@ -671,11 +685,53 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
     const month = get().month ?? new Date().toISOString().slice(0, 7);
     set({ isLoading: true });
     try {
-      await api.post("/planning/generate/optimized", { month, label });
+      const response = await api.post<PlanGenerationResponseDto>("/planning/generate/optimized", {
+        month,
+        label
+      });
       await get().refreshOverviewOnly();
+      const metadata = response.data.metadata as
+        | {
+            fallback_reason?: unknown;
+            failure_reason?: unknown;
+          }
+        | undefined;
+      const fallbackReason =
+        metadata && typeof metadata.fallback_reason === "string"
+          ? (metadata.fallback_reason as string)
+          : undefined;
+      const failureReason =
+        metadata && typeof metadata.failure_reason === "string"
+          ? (metadata.failure_reason as string)
+          : undefined;
+      const fallbackViolation = response.data.violations?.find((violation) =>
+        ["optimizer-infeasible", "optimizer-failed", "optimizer-fallback"].includes(violation.code)
+      );
+      const normalizedStatus =
+        response.data.status ?? (fallbackViolation ? "fallback" : "success");
+      if (normalizedStatus === "fallback") {
+        return {
+          status: "fallback",
+          message:
+            fallbackReason ||
+            fallbackViolation?.message ||
+            "Optimization interrupted. Returned a compliant fallback plan."
+        };
+      }
+      if (normalizedStatus === "error") {
+        return {
+          status: "error",
+          message:
+            failureReason ||
+            fallbackViolation?.message ||
+            "Unable to generate optimized plan."
+        };
+      }
+      return { status: "success" };
     } catch (error) {
       console.warn("Failed to generate optimized plan.", error);
       set({ isLoading: false });
+      return { status: "error", message: formatErrorMessage(error) };
     }
   },
   refreshOverviewOnly: async () => {
@@ -730,3 +786,9 @@ const useScheduleStore = create<ScheduleState>((set, get) => ({
 }));
 
 export default useScheduleStore;
+const formatErrorMessage = (error: unknown): string => {
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") {
+    return error.message;
+  }
+  return "Unexpected error occurred.";
+};

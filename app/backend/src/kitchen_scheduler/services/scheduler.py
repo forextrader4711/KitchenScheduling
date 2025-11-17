@@ -5,7 +5,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from functools import lru_cache
-from typing import Iterable, Literal, Optional, Sequence
+from time import perf_counter
+from typing import Any, Iterable, Literal, Optional, Sequence
 
 from kitchen_scheduler.schemas.resource import PlanningEntryRead
 from kitchen_scheduler.services.rules import RuleSet
@@ -72,6 +73,10 @@ class SchedulingViolation:
 class SchedulingResult:
     entries: list[PlanningEntryRead]
     violations: list[SchedulingViolation] = field(default_factory=list)
+    engine: Literal["heuristic", "optimizer"] = "heuristic"
+    status: Literal["success", "fallback", "error"] = "success"
+    duration_ms: int | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -109,13 +114,13 @@ BASE_TO_PRIME_SHIFT: dict[int, int] = {base: prime for prime, base in PRIME_SHIF
 
 ROLE_SELECTION_PRIORITY: dict[str, int] = {
     "cook": 0,
-    "relief_cook": 1,
-    "kitchen_assistant": 2,
-    "apprentice": 3,
-    "pot_washer": 4,
+    "relief_cook": 0,
+    "kitchen_assistant": 1,
+    "apprentice": 2,
+    "pot_washer": 3,
 }
 
-MONTHLY_OVERRUN_TOLERANCE = 2.0
+MONTHLY_OVERRUN_TOLERANCE = 0.5
 
 
 def _role_rule_key(role: str) -> str:
@@ -136,12 +141,21 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
     Heuristic planner that prioritises working-time safety constraints and then
     fills daily staffing requirements where possible.
     """
+    start = perf_counter()
     year, month = map(int, context.month.split("-"))
     month_days = list(_iter_month_days(year, month))
     entries: list[PlanningEntryRead] = []
 
     if not context.resources or not context.shifts:
-        return SchedulingResult(entries=entries, violations=[])
+        duration_ms = int((perf_counter() - start) * 1000)
+        return SchedulingResult(
+            entries=entries,
+            violations=[],
+            engine="heuristic",
+            status="success",
+            duration_ms=duration_ms,
+            meta={"reason": "missing_resources_or_shifts", "strategy": "heuristic"},
+        )
 
     working_rules = context.rules.rules.working_time
     shift_rules = context.rules.rules.shift_rules
@@ -276,6 +290,12 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
             state.weekly_hours[iso_key] = state.weekly_hours.get(iso_key, 0.0) + float(shift.hours)
             state.monthly_hours += float(shift.hours)
 
+            if (
+                working_rules.max_consecutive_working_days
+                and state.consecutive_days >= working_rules.max_consecutive_working_days
+            ):
+                _schedule_recovery_days(state, day_index, month_days, days=2)
+
             entry_id += 1
 
         # Step 1: satisfy minimums per role.
@@ -298,7 +318,7 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
         def _has_deficit(state: _ResourceScheduleState) -> bool:
             if state.target_hours is None:
                 return False
-            return state.target_hours - state.monthly_hours > 4.0
+            return state.target_hours - state.monthly_hours > MONTHLY_OVERRUN_TOLERANCE
 
         def _fill_day(target: int) -> None:
             while len(assigned_today) < target:
@@ -359,7 +379,15 @@ def generate_stub_schedule(context: SchedulingContext) -> SchedulingResult:
 
     apply_prime_shift_relaxation(context, entries)
     violations = evaluate_rule_violations(context, entries)
-    return SchedulingResult(entries=entries, violations=violations)
+    duration_ms = int((perf_counter() - start) * 1000)
+    return SchedulingResult(
+        entries=entries,
+        violations=violations,
+        engine="heuristic",
+        status="success",
+        duration_ms=duration_ms,
+        meta={"strategy": "heuristic"},
+    )
 
 
 def _assignment_cost(
@@ -444,8 +472,6 @@ def _assignment_cost(
                 score += 30.0
     if state.target_hours is not None and projected_hours > state.target_hours + MONTHLY_OVERRUN_TOLERANCE:
         score += (projected_hours - state.target_hours) * 120.0
-    if state.is_relief:
-        score += 120.0
 
     # Small tie-breaker on total assignments to spread workload.
     score += state.total_assignments * 2.0
@@ -456,6 +482,20 @@ def _assignment_cost(
         score += (projected_day_total - daily_target) * 75.0
 
     return score
+
+
+def _schedule_recovery_days(
+    state: _ResourceScheduleState,
+    day_index: int,
+    month_days: Sequence[date],
+    *,
+    days: int = 2,
+) -> None:
+    for offset in range(1, days + 1):
+        next_index = day_index + offset
+        if next_index >= len(month_days):
+            break
+        state.forced_rest_days.add(month_days[next_index])
 
 
 def apply_prime_shift_relaxation(context: SchedulingContext, entries: list[PlanningEntryRead]) -> None:
@@ -737,6 +777,8 @@ def _apply_working_time_rules(
     resource_dates: dict[int, set[date]] = {}
 
     for entry in entries:
+        if entry.absence_type:
+            continue
         resource_id = entry.resource_id
         hours = shift_hours_map.get(entry.shift_code or 0, 0.0)
         iso_year, iso_week, _ = entry.date.isocalendar()
@@ -926,4 +968,6 @@ def _is_available(resource: SchedulingResource, day: date) -> bool:
 def generate_rule_compliant_schedule(context: SchedulingContext) -> SchedulingResult:
     """Produce a deterministic schedule that respects core working-time rules."""
 
-    return generate_stub_schedule(context)
+    result = generate_stub_schedule(context)
+    result.meta.setdefault("strategy", "rule_compliant")
+    return result

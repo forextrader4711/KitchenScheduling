@@ -38,6 +38,7 @@ from kitchen_scheduler.services.scheduler import (
     AvailabilityWindow,
     SchedulingContext,
     SchedulingResource,
+    SchedulingResult,
     SchedulingShift,
     SchedulingViolation,
     evaluate_rule_violations,
@@ -281,33 +282,12 @@ def _map_violation(v):
     )
 
 
-def _summarize_optimizer_shortfalls(violations: list[SchedulingViolation]) -> tuple[str | None, dict[str, list[str]]]:
-    shortfalls: dict[str, set[str]] = {}
-    for violation in violations:
-        if violation.code not in {"role-min-shortfall", "staffing-shortfall"}:
-            continue
-        if violation.day is None:
-            continue
-        day_key = violation.day.isoformat() if isinstance(violation.day, date) else str(violation.day)
-        role_label = (
-            str(violation.meta.get("role") or violation.meta.get("rule") or "staffing")
-            if violation.code == "role-min-shortfall"
-            else "staffing"
-        )
-        shortfalls.setdefault(day_key, set()).add(role_label)
-    if not shortfalls:
-        return None, {}
-    segments = [f"{day}: {', '.join(sorted(roles))}" for day, roles in sorted(shortfalls.items())]
-    message = "Optimizer fallback: insufficient coverage for " + "; ".join(segments)
-    return message, {day: sorted(roles) for day, roles in shortfalls.items()}
-
-
 async def _run_generation(
     session: AsyncSession,
     month: str,
     *,
     label: str | None = None,
-    strategy: Literal["heuristic", "optimized"] = "heuristic",
+    mode: Literal["auto", "optimizer", "heuristic"] = "auto",
 ) -> PlanGenerationResponse:
     resources = await resource_repo.list_resources(session)
     shifts = await shift_repo.list_shifts(session)
@@ -320,27 +300,30 @@ async def _run_generation(
     else:
         rule_set = load_default_rules()
 
-    scheduling_resources = [
-        SchedulingResource(
-            id=resource.id,
-            role=resource.role.value if hasattr(resource.role, "value") else str(resource.role),
-            availability=_map_availability_template(resource.availability_template),
-            preferred_shift_codes=list(resource.preferred_shift_codes or []),
-            undesired_shift_codes=list(resource.undesired_shift_codes or []),
-            absences=[
-                AbsenceWindow(
-                    start_date=absence.start_date,
-                    end_date=absence.end_date,
-                    absence_type=absence.absence_type,
-                    comment=absence.comment,
-                )
-                for absence in resource.absences
-            ],
-            target_hours=due_hours if _role_key(resource) != "relief_cook" else None,
-            is_relief=_role_key(resource) == "relief_cook",
+    scheduling_resources = []
+    for resource in resources:
+        availability_percent = getattr(resource, "availability_percent", 100) or 100
+        resource_due_hours = due_hours * (availability_percent / 100)
+        scheduling_resources.append(
+            SchedulingResource(
+                id=resource.id,
+                role=resource.role.value if hasattr(resource.role, "value") else str(resource.role),
+                availability=_map_availability_template(resource.availability_template),
+                preferred_shift_codes=list(resource.preferred_shift_codes or []),
+                undesired_shift_codes=list(resource.undesired_shift_codes or []),
+                absences=[
+                    AbsenceWindow(
+                        start_date=absence.start_date,
+                        end_date=absence.end_date,
+                        absence_type=absence.absence_type,
+                        comment=absence.comment,
+                    )
+                    for absence in resource.absences
+                ],
+                target_hours=resource_due_hours,
+                is_relief=_role_key(resource) == "relief_cook",
+            )
         )
-        for resource in resources
-    ]
 
     scheduling_shifts = [
         SchedulingShift(
@@ -359,28 +342,71 @@ async def _run_generation(
         shifts=scheduling_shifts,
         rules=rule_set,
     )
-    if strategy == "optimized":
-        optimized_result = generate_optimised_schedule(context)
-        optimizer_violation = any(violation.code == "optimizer-failed" for violation in optimized_result.violations)
-        if optimizer_violation or not optimized_result.entries:
-            result = generate_rule_compliant_schedule(context)
-            summary, meta = _summarize_optimizer_shortfalls(result.violations)
-            if summary:
-                result.violations.append(
-                    SchedulingViolation(
-                        code="optimizer-infeasible",
-                        message=summary,
-                        severity="warning",
-                        scope="schedule",
-                        meta={"shortfalls": meta},
-                    )
-                )
+    attempts: list[dict[str, Any]] = []
+
+    def _record_attempt(attempt: SchedulingResult) -> None:
+        attempt_meta: dict[str, Any] = {
+            "engine": attempt.engine,
+            "status": attempt.status,
+            "duration_ms": attempt.duration_ms,
+        }
+        if attempt.meta:
+            attempt_meta["meta"] = attempt.meta
+        attempts.append(attempt_meta)
+
+    result: SchedulingResult | None = None
+    fallback_reason: str | None = None
+    prefer_optimizer = mode in {"auto", "optimizer"}
+
+    if prefer_optimizer:
+        optimized = generate_optimised_schedule(context)
+        _record_attempt(optimized)
+        if optimized.status == "success" and optimized.entries:
+            result = optimized
         else:
-            result = optimized_result
-    else:
-        result = generate_rule_compliant_schedule(context)
+            fallback_reason = (
+                optimized.meta.get("failure_reason")
+                or optimized.meta.get("reason")
+                or optimized.meta.get("solver_status")
+                or "optimizer_failed"
+            )
+
+    if result is None:
+        heuristic = generate_rule_compliant_schedule(context)
+        # If we specifically asked for heuristic mode, keep status as-is.
+        if fallback_reason:
+            heuristic.status = "fallback" if heuristic.entries else "error"
+            heuristic.meta["fallback_reason"] = fallback_reason
+            heuristic.violations.append(
+                SchedulingViolation(
+                    code="optimizer-fallback",
+                    message=(
+                        "Optimizer unavailable "
+                        f"(reason: {fallback_reason}). Returned heuristic schedule."
+                    ),
+                    severity="warning",
+                    scope="schedule",
+                    meta={"reason": fallback_reason},
+                )
+            )
+        else:
+            heuristic.meta.setdefault("reason", "heuristic_requested" if mode == "heuristic" else "heuristic_run")
+        _record_attempt(heuristic)
+        result = heuristic
+
+    result_meta = dict(result.meta)
+    result_meta["attempts"] = attempts
+    result_meta["mode"] = mode
+
     violations = [_map_violation(v) for v in result.violations]
-    response = PlanGenerationResponse(entries=result.entries, violations=violations)
+    response = PlanGenerationResponse(
+        entries=result.entries,
+        violations=violations,
+        engine=result.engine,
+        status=result.status,
+        duration_ms=result.duration_ms,
+        metadata=result_meta,
+    )
 
     scenario = await planning_repo.ensure_scenario(
         session,
@@ -389,11 +415,21 @@ async def _run_generation(
         name="Draft Scenario",
     )
     scenario.status = "draft"
+    computed_label: str | None
+    if label is not None:
+        computed_label = label
+    else:
+        if result.status == "fallback":
+            computed_label = "v-fallback"
+        elif result.engine == "optimizer":
+            computed_label = "v-optimized"
+        else:
+            computed_label = "v-heuristic"
     await planning_repo.store_plan_generation(
         session,
         scenario,
         response,
-        version_label=label or ("Optimized" if strategy == "optimized" else None),
+        version_label=computed_label,
     )
 
     resource_map = {resource.id: resource for resource in resources}
@@ -417,7 +453,7 @@ async def generate_plan(
     payload: PlanGenerationRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> PlanGenerationResponse:
-    return await _run_generation(session, payload.month, label=payload.label, strategy="heuristic")
+    return await _run_generation(session, payload.month, label=payload.label)
 
 
 @router.post("/generate/optimized", response_model=PlanGenerationResponse)
@@ -425,7 +461,7 @@ async def generate_optimized_plan(
     payload: PlanGenerationRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> PlanGenerationResponse:
-    return await _run_generation(session, payload.month, label=payload.label, strategy="optimized")
+    return await _run_generation(session, payload.month, label=payload.label)
 
 
 @router.post("/scenarios/{scenario_id}/generate", response_model=PlanGenerationResponse)
@@ -1016,7 +1052,13 @@ async def apply_suggestion_to_scenario(
     violations_raw = evaluate_rule_violations(context, planning_entries)
     violations = [_map_violation(v) for v in violations_raw]
 
-    response = PlanGenerationResponse(entries=planning_entries, violations=violations)
+    response = PlanGenerationResponse(
+        entries=planning_entries,
+        violations=violations,
+        engine="manual",
+        status="success",
+        metadata={"reason": "applied_suggestion"},
+    )
     await planning_repo.store_plan_generation(session, scenario, response, version_label=payload.label)
     await session.commit()
     return response

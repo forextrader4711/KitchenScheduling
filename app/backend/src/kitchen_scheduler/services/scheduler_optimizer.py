@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
-from typing import Dict, List, Tuple
+from time import perf_counter
+from typing import Any, Dict, List, Tuple
 
 from ortools.sat.python import cp_model
 
@@ -35,11 +36,15 @@ class OptimizerConfig:
     overtime_penalty: int = 15
     undertime_penalty: int = 20
     undesired_shift_penalty: int = 30
-    relief_shift_penalty: int = 50
+    relief_shift_penalty: int = 5
     late_hours_threshold: int = 46  # hours per ISO week before penalties
     late_hours_penalty: int = 10
     prime_optional_penalty: int = 20
     linear_staff_penalty: int = 25
+    staff_deficit_penalty: int = 600
+    role_deficit_penalty: int = 500
+    consecutive_days_penalty: int = 800
+    rest_block_penalty: int = 500
 
 
 def _scaled(hours: float) -> int:
@@ -52,8 +57,21 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
 
     year, month_number = map(int, context.month.split("-"))
     month_days = list(_iter_month_days(year, month_number))
-    if not month_days:
-        return SchedulingResult(entries=[], violations=[])
+    start = perf_counter()
+
+    def _empty_result(reason: str, violations: list[SchedulingViolation] | None = None) -> SchedulingResult:
+        duration_ms = int((perf_counter() - start) * 1000)
+        return SchedulingResult(
+            entries=[],
+            violations=violations or [],
+            engine="optimizer",
+            status="error",
+            duration_ms=duration_ms,
+            meta={"reason": reason, "solver_status": "NOT_RUN"},
+        )
+
+    if not month_days or not context.resources or not context.shifts:
+        return _empty_result("insufficient_inputs")
 
     shift_map: Dict[int, SchedulingShift] = {shift.code: shift for shift in context.shifts}
     max_daily_units = max((_scaled(shift.hours) for shift in context.shifts), default=_scaled(12.0))
@@ -136,6 +154,8 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
     working_rules = context.rules.rules.working_time
 
     linear_target = daily_staff_target(context)
+    day_staff_deficits: Dict[int, cp_model.IntVar | None] = {}
+    role_deficits: Dict[tuple[str, int], cp_model.IntVar | None] = {}
 
     for day_index, _day in enumerate(month_days):
         day_work_vars: List[cp_model.IntVar] = []
@@ -159,7 +179,14 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
 
         total_staff = model.NewIntVar(0, len(context.resources), f"total_day_{day_index}")
         model.Add(total_staff == sum(day_work_vars))
-        model.Add(total_staff >= shift_rules.minimum_daily_staff)
+        minimum_daily_staff = shift_rules.minimum_daily_staff or 0
+        if minimum_daily_staff > 0:
+            staff_deficit = model.NewIntVar(0, len(context.resources), f"staff_deficit_{day_index}")
+            model.Add(total_staff + staff_deficit >= minimum_daily_staff)
+            objective_terms.append(staff_deficit * config.staff_deficit_penalty)
+            day_staff_deficits[day_index] = staff_deficit
+        else:
+            day_staff_deficits[day_index] = None
         if linear_target > 0:
             deviation = model.NewIntVar(0, len(context.resources), f"staff_dev_{day_index}")
             model.Add(deviation >= total_staff - linear_target)
@@ -173,9 +200,16 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
             role_composition = shift_rules.composition.get(role_key)
             if role_composition:
                 if role_composition.min is not None and role_composition.min > 0:
-                    model.Add(total_role >= role_composition.min)
+                    role_deficit = model.NewIntVar(0, len(context.resources), f"role_deficit_{role_key}_{day_index}")
+                    model.Add(total_role + role_deficit >= role_composition.min)
+                    objective_terms.append(role_deficit * config.role_deficit_penalty)
+                    role_deficits[(role_key, day_index)] = role_deficit
+                else:
+                    role_deficits[(role_key, day_index)] = None
                 if role_composition.max is not None:
                     model.Add(total_role <= role_composition.max)
+            else:
+                role_deficits[(role_key, day_index)] = None
 
         # Pot washer pairing rule
         if pot_washer_shift_early and pot_washer_shift_late:
@@ -195,6 +229,9 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
         iso_key = (iso_year, iso_week)
         iso_week_to_days[iso_key].append(index)
         day_to_iso[index] = iso_key
+
+    rest_slack: Dict[tuple[int, int], cp_model.BoolVar | None] = {}
+    consecutive_slack: Dict[tuple[int, int], cp_model.IntVar | None] = {}
 
     for resource in context.resources:
         total_hours = model.NewIntVar(0, max_month_units, f"total_hours_{resource.id}")
@@ -222,7 +259,10 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
         if limit > 0:
             for start in range(len(month_days) - limit):
                 window = [work_vars[(resource.id, idx)] for idx in range(start, start + limit + 1)]
-                model.Add(sum(window) <= limit)
+                excess = model.NewIntVar(0, limit + 1, f"consec_excess_{resource.id}_{start}")
+                model.Add(sum(window) <= limit + excess)
+                objective_terms.append(excess * config.consecutive_days_penalty)
+                consecutive_slack[(resource.id, start)] = excess
 
         # Required rest block
         required_rest = working_rules.required_consecutive_days_off_per_month
@@ -235,7 +275,18 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
                     model.Add(work_var == 0).OnlyEnforceIf(rest_block)
                 rest_block_vars.append(rest_block)
             if rest_block_vars:
-                model.Add(sum(rest_block_vars) >= 1)
+                rest_satisfied = model.NewBoolVar(f"rest_satisfied_{resource.id}")
+                model.Add(sum(rest_block_vars) >= 1).OnlyEnforceIf(rest_satisfied)
+                rest_miss = model.NewBoolVar(f"rest_miss_{resource.id}")
+                model.Add(rest_satisfied == 0).OnlyEnforceIf(rest_miss)
+                objective_terms.append(rest_miss * config.rest_block_penalty)
+                rest_slack[(resource.id, 0)] = rest_miss
+
+        # Enforce two-day recovery after five consecutive work days (max five working days within any 7-day block)
+        if len(month_days) >= 7:
+            for start in range(len(month_days) - 6):
+                window = [work_vars[(resource.id, start + offset)] for offset in range(7)]
+                model.Add(sum(window) <= 5)
 
         # Monthly hour deviation (soft objective)
         if resource.target_hours is not None:
@@ -275,14 +326,27 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
         model.Minimize(0)
 
     status = solver.Solve(model)
+    duration_ms = int((perf_counter() - start) * 1000)
+    solver_status_name = solver.StatusName(status)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        # Fallback to heuristic if optimizer cannot find a solution
-        return SchedulingResult(entries=[], violations=[SchedulingViolation(
-            code="optimizer-failed",
-            message="Optimizer could not find a feasible schedule.",
-            severity="critical",
-        )])
+        message, meta = _describe_infeasibility(context, month_days)
+        return SchedulingResult(
+            entries=[],
+            violations=[
+                SchedulingViolation(
+                    code="optimizer-failed",
+                    message=message,
+                    severity="critical",
+                    scope="schedule",
+                    meta={"shortfalls": meta} if meta else None,
+                )
+            ],
+            engine="optimizer",
+            status="error",
+            duration_ms=duration_ms,
+            meta={"failure_reason": message, "solver_status": solver_status_name, "details": meta},
+        )
 
     entries: List[PlanningEntryRead] = []
     entry_id = 1
@@ -331,4 +395,164 @@ def generate_optimised_schedule(context: SchedulingContext, config: OptimizerCon
 
     apply_prime_shift_relaxation(context, entries)
     violations = evaluate_rule_violations(context, entries)
-    return SchedulingResult(entries=entries, violations=violations)
+
+    day_index_lookup = {day: idx for idx, day in enumerate(month_days)}
+    resource_lookup = {resource.id: resource for resource in context.resources}
+    day_assignment_counts: Dict[int, int] = defaultdict(int)
+    role_assignment_counts: Dict[tuple[str, int], int] = defaultdict(int)
+
+    for entry in entries:
+        if entry.shift_code is None:
+            continue
+        idx = day_index_lookup.get(entry.date)
+        if idx is None:
+            continue
+        day_assignment_counts[idx] += 1
+        resource = resource_lookup.get(entry.resource_id)
+        if resource is not None:
+            role_key = _role_rule_key(resource.role)
+            role_assignment_counts[(role_key, idx)] += 1
+
+    for day_index, deficit_var in day_staff_deficits.items():
+        if deficit_var is None:
+            continue
+        deficit_value = solver.Value(deficit_var)
+        if deficit_value <= 0:
+            continue
+        assigned = day_assignment_counts.get(day_index, 0)
+        target_day = month_days[day_index]
+        violations.append(
+            SchedulingViolation(
+                code="staffing-shortfall",
+                message=(
+                    f"Only {assigned} resources assigned on {target_day.isoformat()} "
+                    f"(short by {deficit_value})."
+                ),
+                severity="warning",
+                scope="day",
+                day=target_day,
+                meta={
+                    "date": target_day.isoformat(),
+                    "assigned": assigned,
+                    "required": shift_rules.minimum_daily_staff,
+                    "deficit": deficit_value,
+                },
+            )
+        )
+
+    for (role_key, day_index), deficit_var in role_deficits.items():
+        if deficit_var is None:
+            continue
+        deficit_value = solver.Value(deficit_var)
+        if deficit_value <= 0:
+            continue
+        assigned = role_assignment_counts.get((role_key, day_index), 0)
+        target_day = month_days[day_index]
+        min_required = shift_rules.composition.get(role_key).min if shift_rules.composition.get(role_key) else None
+        violations.append(
+            SchedulingViolation(
+                code="role-min-shortfall",
+                message=(
+                    f"Role {role_key} short by {deficit_value} on {target_day.isoformat()} "
+                    f"(assigned {assigned})."
+                ),
+                severity="warning",
+                scope="day",
+                day=target_day,
+                meta={
+                    "date": target_day.isoformat(),
+                    "role": role_key,
+                    "assigned": assigned,
+                    "required": min_required,
+                    "deficit": deficit_value,
+                },
+            )
+        )
+
+    for (resource_id, start), slack_var in consecutive_slack.items():
+        if slack_var is None:
+            continue
+        excess = solver.Value(slack_var)
+        if excess <= 0:
+            continue
+        day = month_days[start + working_rules.max_consecutive_working_days] if start + working_rules.max_consecutive_working_days < len(month_days) else month_days[-1]
+        violations.append(
+            SchedulingViolation(
+                code="consecutive-days-relaxed",
+                message=(
+                    f"Resource {resource_id} exceeded consecutive day limit by {excess} around {day.isoformat()}."
+                ),
+                severity="warning",
+                scope="resource",
+                resource_id=resource_id,
+                day=day,
+                meta={
+                    "resource_id": resource_id,
+                    "excess": excess,
+                    "limit": working_rules.max_consecutive_working_days,
+                },
+            )
+        )
+
+    for (resource_id, _), rest_var in rest_slack.items():
+        if rest_var is None:
+            continue
+        value = solver.Value(rest_var)
+        if value <= 0:
+            continue
+        violations.append(
+            SchedulingViolation(
+                code="rest-block-missing",
+                message=f"Resource {resource_id} missing required consecutive rest block.",
+                severity="warning",
+                scope="resource",
+                resource_id=resource_id,
+                meta={"resource_id": resource_id, "required": working_rules.required_consecutive_days_off_per_month},
+            )
+        )
+
+    solver_meta: dict[str, Any] = {
+        "solver_status": solver_status_name,
+        "objective_value": solver.ObjectiveValue(),
+        "best_bound": solver.BestObjectiveBound(),
+        "num_conflicts": solver.NumConflicts(),
+        "num_branches": solver.NumBranches(),
+        "wall_time_seconds": solver.WallTime(),
+    }
+    return SchedulingResult(
+        entries=entries,
+        violations=violations,
+        engine="optimizer",
+        status="success",
+        duration_ms=duration_ms,
+        meta=solver_meta,
+    )
+
+
+def _describe_infeasibility(context: SchedulingContext, month_days: list[date]) -> tuple[str, dict[str, list[str]] | None]:
+    shift_rules = context.rules.rules.shift_rules
+    shortfalls: dict[str, set[str]] = defaultdict(set)
+
+    for day in month_days:
+        available_resources = [
+            resource for resource in context.resources if _resource_available_on_day(resource, day)
+        ]
+        total_available = len(available_resources)
+        if total_available < (shift_rules.minimum_daily_staff or 0):
+            shortfalls[day.isoformat()].add("staffing")
+
+        role_counts: dict[str, int] = defaultdict(int)
+        for resource in available_resources:
+            role_counts[_role_rule_key(resource.role)] += 1
+
+        for role_key, composition in shift_rules.composition.items():
+            if composition and composition.min is not None and composition.min > 0:
+                if role_counts.get(role_key, 0) < composition.min:
+                    shortfalls[day.isoformat()].add(role_key)
+
+    if not shortfalls:
+        return "Optimizer could not find a feasible schedule.", None
+
+    segments = [f"{day}: {', '.join(sorted(labels))}" for day, labels in sorted(shortfalls.items())]
+    message = "Optimizer could not find a feasible schedule; insufficient available resources for " + "; ".join(segments)
+    return message, {day: sorted(labels) for day, labels in shortfalls.items()}

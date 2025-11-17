@@ -49,6 +49,10 @@ class PlanViolation(BaseModel):
 class PlanGenerationResponse(BaseModel):
     entries: List[PlanningEntryRead]
     violations: List[PlanViolation] = Field(default_factory=list)
+    engine: Literal["optimizer", "heuristic", "manual"] = "heuristic"
+    status: Literal["success", "fallback", "error"] = "success"
+    duration_ms: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class PlanVersionRead(BaseModel):
